@@ -1,0 +1,406 @@
+:root {
+    --status-online: lightgreen;
+    --status-offline: grey;
+    --status-on-website: yellow;
+    --status-other: orange;
+    --status-error: red;
+    --status-connecting: orange;
+    --dot-size: 12px;
+    --border-width: 2px;
+    --quick-status-width: 60px;
+    --timeline-id-width: 150px; /* Match scale select width approx */
+}
+
+/* Add expansion toggle styles */
+.section-toggle {
+    width: 0;
+    height: 0;
+    border-style: solid;
+    cursor: pointer;
+    display: inline-block;
+    margin-right: 8px;
+    position: relative;
+}
+
+.section-toggle.expanded {
+    border-width: 8px 5px 0 5px;
+    border-color: #fff transparent transparent transparent;
+}
+
+.section-toggle.collapsed {
+    border-width: 5px 0 5px 8px;
+    border-color: transparent transparent transparent #fff;
+}
+
+.section-toggle::after {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: -8px;
+    right: -8px;
+    bottom: -8px;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+/* For the black background in quick-status and timeline */
+.section-toggle.dark.expanded {
+    border-color: #333 transparent transparent transparent;
+}
+
+.section-toggle.dark.collapsed {
+    border-color: transparent transparent transparent #333;
+}
+
+.section-toggle.dark::after {
+    border-color: rgba(0, 0, 0, 0.3);
+}
+
+/* Collapsed section styles */
+#status-line {
+    display: flex;
+    flex-direction: column; /* Use column to stack the items */
+    align-items: stretch;
+    padding: 0;
+    flex-shrink: 0; /* Prevent shrinking */
+    background-color: #333;
+    color: white;
+    overflow: hidden; /* Ensure content doesn't bleed out */
+}
+
+#status-line .status-bar {
+    display: flex;
+    align-items: center;
+    padding: 5px 10px;
+    height: 25px; /* Relatively thin */
+}
+
+#status-line.collapsed {
+    height: 40px; /* Ensure it's tall enough to fully contain the status bar with padding */
+}
+
+#status-line.expanded {
+    height: auto; /* Allow height to fit content */
+}
+
+#status-line .section-toggle {
+    margin-right: 10px;
+}
+
+#future-output-area {
+    padding: 10px;
+    background-color: #444;
+    color: white;
+    width: 100%;
+    box-sizing: border-box;
+    display: none;
+}
+
+#status-line.expanded #future-output-area {
+    display: block;
+}
+
+#quick-status-bar {
+    display: flex;
+    flex-wrap: wrap; /* Allow wrapping */
+    padding: 10px;
+    background-color: #eee;
+    gap: 10px;
+    flex-shrink: 0; /* Prevent shrinking */
+    border-bottom: 1px solid #ccc;
+    position: relative; /* For absolute positioning of toggle */
+    margin-top: 0; /* Ensure no negative margin */
+}
+
+#quick-status-bar.collapsed {
+    padding: 5px 10px;
+    height: 30px;
+    overflow: hidden;
+    display: flex;
+    flex-wrap: nowrap; /* Prevent wrapping when collapsed */
+    align-items: center;
+}
+
+#quick-status-bar.collapsed .user-status-item {
+    width: 25px;
+    height: 25px;
+    padding: 1px;
+    margin-right: 5px;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#quick-status-bar.collapsed .user-status-item img {
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    border: 1px solid; /* Use status color for border */
+}
+
+#quick-status-bar.collapsed .user-status-item span {
+    display: none;
+}
+
+/* For the collapsed state, set border color based on status */
+#quick-status-bar.collapsed .status-bg-online img { border-color: var(--status-online); }
+#quick-status-bar.collapsed .status-bg-offline img { border-color: var(--status-offline); }
+#quick-status-bar.collapsed .status-bg-on-website img { border-color: var(--status-on-website); }
+#quick-status-bar.collapsed .status-bg-other img { border-color: var(--status-other); }
+#quick-status-bar.collapsed .status-bg-error img { border-color: var(--status-error); }
+
+#timeline-container.collapsed #timeline-header {
+    height: 25px;
+}
+
+#timeline-container.collapsed #timeline-users {
+    display: none;
+}
+
+/* Hide everything in the timeline header when collapsed except the toggle and history label */
+#timeline-container.collapsed .timeline-header-section.graph-area {
+    display: none;
+}
+
+#timeline-container.collapsed .timeline-header-section.id-area {
+    width: 100%;
+    background-color: #f0f0f0;
+}
+
+#timeline-container.collapsed .timeline-header-section.id-area label,
+#timeline-container.collapsed .timeline-header-section.id-area #time-scale-select {
+    display: none;
+}
+
+/* Make sure border between sections isn't visible when collapsed */
+#timeline-container.collapsed .timeline-header-section.id-area {
+    border-right: none;
+}
+
+.history-label {
+    display: none;
+    margin-left: 5px;
+    font-weight: normal;
+}
+
+#timeline-container.collapsed .history-label {
+    display: inline-block;
+}
+
+body {
+    font-family: sans-serif;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background-color: #f4f4f4;
+    overflow: hidden; /* Prevent body scroll */
+}
+
+#refresh-button {
+    background: none;
+    border: 1px solid white;
+    color: white;
+    cursor: pointer;
+    padding: 2px 5px;
+    font-size: 1em;
+    border-radius: 3px;
+}
+#refresh-button:hover {
+    background-color: #555;
+}
+
+.status-dot {
+    display: inline-block;
+    width: var(--dot-size);
+    height: var(--dot-size);
+    border-radius: 50%;
+    background-color: var(--status-offline); /* Default */
+    vertical-align: middle;
+}
+
+#status-message {
+    margin-left: auto; /* Push to the right */
+    margin-right: 0;
+    font-style: italic;
+}
+
+.user-status-item {
+    width: var(--quick-status-width);
+    /* Set background based on status, default to offline */
+    background-color: var(--status-offline); 
+    /* Use a consistent black border */
+    border: var(--border-width) solid black; 
+    border-radius: 5px;
+    padding: 5px;
+    text-align: center;
+    /* Removed background-color: white; */
+    box-shadow: 1px 1px 3px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.user-status-item img {
+    width: 40px;
+    height: 40px;
+    border-radius: 3px;
+    margin-bottom: 4px;
+    object-fit: cover; /* Ensure aspect ratio maintained */
+}
+
+.user-status-item span {
+    font-size: 0.8em;
+    /* Text overflow handling */
+    display: block; /* Needed for overflow to work properly */
+    width: 100%; 
+    white-space: nowrap; /* Prevent wrapping */
+    overflow: hidden; /* Hide overflow */
+    text-overflow: ellipsis; /* Add '...' for clipped text */
+    line-height: 1.1;
+    /* Default text color */
+    color: black;
+}
+
+/* Remove border-color classes */
+/* .status-color-online { border-color: var(--status-online); } */
+/* .status-color-offline { border-color: var(--status-offline); } */
+/* .status-color-other { border-color: var(--status-other); } */
+/* .status-color-error { border-color: var(--status-error); } */
+
+/* Add background-color classes */
+.status-bg-online { background-color: var(--status-online); }
+.status-bg-offline { background-color: var(--status-offline); color: white; } /* Add white text for contrast */
+.status-bg-on-website { background-color: var(--status-on-website); }
+.status-bg-other { background-color: var(--status-other); }
+.status-bg-error { background-color: var(--status-error); color: white; } /* Add white text for contrast */
+
+#timeline-container {
+    flex-grow: 1; /* Fill remaining space */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Important for child scrolling */
+    background-color: #fff;
+}
+
+#timeline-header {
+    display: flex;
+    border-bottom: 1px solid #aaa;
+    flex-shrink: 0;
+    background-color: #f0f0f0;
+    height: 35px; /* Adjust as needed */
+    align-items: center; /* Vertically center content */
+    position: relative; /* For absolute positioning of toggle */
+}
+
+.timeline-header-section {
+    padding: 5px;
+    box-sizing: border-box;
+}
+
+.timeline-header-section.id-area {
+    width: var(--timeline-id-width);
+    flex-shrink: 0;
+    border-right: 1px solid #aaa;
+    display: flex;
+    align-items: center;
+    padding-left: 25px; /* Make room for the toggle */
+}
+
+#timeline-container.collapsed .timeline-header-section.id-area {
+    padding-left: 45px; /* More space for toggle and "History" label */
+}
+
+#time-scale-select {
+    margin-left: 5px;
+}
+
+.timeline-header-section.graph-area {
+    flex-grow: 1;
+    overflow: hidden; /* Prevent axis from overflowing */
+    /* TODO: Add styles for axis markers */
+    position: relative; /* For absolute positioning of markers if needed */
+}
+
+#timeline-users {
+    flex-grow: 1;
+    overflow-y: auto; /* Allow vertical scrolling for users */
+    overflow-x: hidden; /* Horizontal scroll handled by graph area */
+}
+
+.timeline-user-row {
+    display: flex;
+    border-bottom: 1px solid #eee;
+    min-height: 35px; /* Adjust as needed, was 50px */
+}
+
+.timeline-user-row .id-area {
+    width: var(--timeline-id-width);
+    flex-shrink: 0;
+    padding: 3px 5px; /* Adjust as needed, was 5px */
+    box-sizing: border-box;
+    border-right: 1px solid #aaa;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background-color: #f8f8f8; /* Default, will be overridden by JS */
+}
+
+.timeline-user-row .id-area img {
+    width: 24px;  /* Was 30px */
+    height: 24px; /* Was 30px */
+    border-radius: 3px;
+    object-fit: cover;
+}
+
+.timeline-user-row .id-area span {
+     font-size: 0.9em;
+}
+
+.timeline-user-row .graph-area {
+    flex-grow: 1;
+    overflow-x: auto; /* Allow horizontal scrolling for timeline */
+    position: relative;
+    background-color: #e0e0e0; /* Default graph background */
+    /* TODO: Add styles for graph segments */
+}
+
+/* Add styles for graph segments based on status later */
+.timeline-segment {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    /* width and left will be set by JS */
+}
+
+.timeline-segment.online { background-color: var(--status-online); }
+.timeline-segment.offline { background-color: var(--status-offline); }
+.timeline-segment.on-website { background-color: var(--status-on-website); }
+.timeline-segment.other { background-color: var(--status-other); }
+.timeline-segment.error { background-color: var(--status-error); }
+
+/* Timeline toggle positioning */
+#timeline-section-toggle {
+    position: absolute;
+    left: 5px;
+    top: 8px;
+    z-index: 10;
+}
+
+/* Quick status toggle positioning */
+#quick-status-section-toggle {
+    position: absolute;
+    left: 5px;
+    top: 8px;
+    z-index: 10;
+}
+
+#status-line .section-toggle {
+    margin-right: 10px;
+}
+
+#status-line .status-bar > * {
+    margin-right: 15px;
+} 

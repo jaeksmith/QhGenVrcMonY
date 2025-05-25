@@ -1,0 +1,116 @@
+## VRChat Monitor Application - Derived Specifications
+
+### I. Core Goal
+- Develop a Java application providing a real-time, web-based UI for monitoring the online status and status history of specified VRChat users.
+
+### II. Technology Stack
+- Java 17+
+- Spring Boot (Web, WebSocket, Scheduling)
+- Maven (Build & Dependency Management)
+- Reactor (for WebClient reactive API calls)
+- Jackson (JSON handling, including Java 8 Time module)
+- SLF4j + Logback (Logging)
+- HTML, CSS, JavaScript (Frontend UI)
+- WebSockets (for real-time backend-frontend communication)
+
+### III. Backend Functionality
+
+1.  **Configuration (`config.json`):
+    - Load user list from `src/main/resources/config.json` on startup.
+    - Format: `{ "users": [ { "hrToken": "HumanName", "vrcUid": "usr_...", "pollRate": "XmYs" }, ... ] }`
+    - Parse `pollRate` string (e.g., "30s", "1m45s") into `java.time.Duration`.
+
+2.  **Authentication (Startup):
+    - Prompt user for VRChat username and password via system console.
+    - Hide password input.
+    - Use VRChat API (`GET /auth/user` with Basic Auth) to validate credentials.
+    - Handle 2FA (Email OTP / TOTP):
+        - Detect 2FA requirement from initial `/auth/user` response body.
+        - Store the initial `auth` cookie received in the `/auth/user` response.
+        - Prompt user via console for the 2FA code (visible input).
+        - Verify the code using `POST /auth/twofactorauth/[type]/verify` (sending the code in the body and the initial `auth` cookie).
+        - On success, store the final `auth` cookie and the `twoFactorAuth` cookie from the verification response.
+    - Retry login attempts up to 3 times on failure (wrong credentials, invalid 2FA code).
+    - Exit application if authentication fails definitively.
+    - Retain the necessary authentication cookies (`auth`, `twoFactorAuth`) for subsequent API calls.
+
+3.  **Background Monitoring (`MonitoringService`):
+    - Start only after successful authentication.
+    - For each user in `config.json`, schedule a periodic task using Spring's `TaskScheduler` based on their `pollRate`.
+    - Each task calls `VRChatApiService.getUserByUid`.
+    - `VRChatApiService.getUserByUid`:
+        - Sends `GET /users/{userId}` request.
+        - Includes both `auth` and `twoFactorAuth` cookies if available.
+        - Handles network errors (`SocketException`, `IOException`, etc.) with an exponential backoff retry strategy (1s base, ~10m max, ~7 attempts).
+        - Checks response body for `{"error":...}` payload even on 200 OK.
+        - Parses successful, non-error responses into `VRChatUser` object.
+        - Returns `Mono<VRChatUser>` on success, `Mono.empty()` on retry exhaustion or unrecoverable API/parsing errors.
+    - Store the latest fetched `VRChatUser` object or error state per user in `UserStateService`.
+    - Store historical status changes (required for timeline graph - *Implementation TBD*).
+    - Log status updates and errors using SLF4j (with timestamps via `application.properties` config).
+
+4.  **State Management (`UserStateService`):
+    - Maintain a map of `vrcUid` to the latest `UserState` (containing `VRChatUser`, timestamp, and error status).
+    - Provide methods to update and retrieve user states.
+    - Maintain historical status data (list of status changes with timestamps) per user (*Implementation TBD*).
+
+5.  **WebSocket Communication (`WebSocketHandler` - *Implementation TBD*):
+    - Establish a WebSocket endpoint (e.g., `/ws/status`).
+    - On client connect:
+        - Send the current status of all monitored users.
+        - Send the recent status history for the timeline graph.
+    - When `MonitoringService` updates a user's state:
+        - Broadcast the updated user status (and possibly the new history entry) to all connected WebSocket clients.
+    - Handle multiple client connections.
+
+### IV. Web UI Functionality (Frontend - *Implementation TBD*)
+
+1.  **General:**
+    - Single Page Application structure.
+    - Connect to the backend WebSocket endpoint (`/ws/status`).
+    - Handle initial data load (current statuses, history).
+    - Update UI components in real-time based on messages received via WebSocket.
+    - Implement reconnect logic for WebSocket connection drops.
+
+2.  **Status Line:**
+    - Thin horizontal bar at the top.
+    - Refresh Button (Left): Manually requests current state snapshot from backend via WebSocket.
+    - WebSocket Status Dot: Color indicates client-backend WebSocket connection health.
+    - Backend Status Dot: Color indicates backend's ability to communicate with VRChat API (based on recent poll success/failure rates - *logic TBD*).
+    - Timestamp: Displays timestamp of the last data received from the backend.
+    - Status Message: Shows overall operational status or last major error message from backend.
+
+3.  **Quick Status Bar:**
+    - Horizontal, wrapping list below the status line.
+    - Per User Area:
+        - VRChat User Icon (fetched from `VRChatUser.userIcon` or `currentAvatarThumbnailImageUrl`).
+        - Human-Readable Token (`hrToken` from config).
+        - Border Color based on `VRChatUser.state`:
+            - `online`: Light Green
+            - `offline`: Grey
+            - Other `state` values: Mid-to-Darker Yellow
+            - Poll Error: Red
+    - Order matches `config.json`.
+
+4.  **Timeline Graph:**
+    - Fills remaining vertical space.
+    - Top Config/Info Line:
+        - Time Scale Dropdown (Left): Seconds per pixel (e.g., 1s, 5s, 15s, 30s, 1m, 5m, 15m). Default 1s/pixel.
+        - Time Axis (Right): Vertical lines marking minutes, hours, days with distinct colors/thickness.
+    - Per User Row:
+        - ID Area (Fixed Width): Small User Icon + `hrToken`.
+        - Timeline Area (Remaining Width): Horizontal bar graph.
+            - Colors represent status (`state`) during time intervals matching the scale.
+            - Use same color mapping as Quick Status Bar.
+            - Time flows right-to-left (most recent on left).
+            - Graph scrolls/updates automatically based on time scale.
+            - Fill new pixels on left with last known status color.
+    - Horizontal separator lines between users and between time axis/first user.
+
+### V. Architecture
+- Modular design with distinct services/components:
+    - `config`: Loading and parsing `config.json`.
+    - `models`: Data transfer objects (e.g., `VRChatUser`, `CurrentUser`, config models).
+    - `services`: Core logic (e.g., `VRChatApiService`, `AuthService`, `MonitoringService`, `UserStateService`).
+    - `web`: WebSocket endpoint, potentially REST controllers if needed later.
+- Use Spring dependency injection. 

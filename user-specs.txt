@@ -1,0 +1,64 @@
+Create a java app that presents a web-interface for monitoring VRChat friends.
+
+On first run, before starting up services, the app should request credentials via console input hiding password entry/chars.
+On receiving credentials, it should test them - try login - against the VRChat service to validate they work.
+If they fail, asking for credentials again.
+Once success, the app should proceed to it's main processing.
+
+The app should actively monitor friends statuses in the background while running and login info is present.
+
+It can output misc activity - noted status changes, failures, etc - to the console for observation, but this is just visual logging - not the UI.  (This is more meant to observe lifetime / activity of the server ... and potentially also compare to client views - e.g. observing if they are updated, etc).
+
+The UI should be web-based and active - e.g. should remain activity connected in order to show live updates.
+The app should support multiple connections to the app - e.g. multiple browser clients connects with their own local interactive state so I can monitor from multiple locations.
+The monitoring should not be dependent on clients being active (browsers being connected) - thus clients are viewing/interacting with the monitoring/state.
+
+There should be a config file that contains a list of VRChat users including { a local human-readable-token, VRChat user ID, background and forground polling rates } ... it should be json based, initially this--
+{
+	users: [
+		{ HRToken: "Sam.Smith", VRCUID: "usr_32451333-3801-4523-5134-561234ab3e", PollRate: 30s },
+		{ HRToken: "Eddington", VRCUID: "usr_67896789-3a33-43234-876867-13243laae", PollRate: 1m45s }
+	]
+}
+We'll add more tokens when we add more features...
+
+The UI should present the following areas--
+
+A horizonal status line {
+This is meant to indicate whether things appear to be running fine.
+The status line will ideally be thin - potentially a bit bigger than is needed to fit text.
+There should be a refresh button on the left most end - this would be to query the current state from the server - not to force an user-status updates.
+Next, it should have two color based status dots--
+- the first represents whether the client is communicating fine with the app back end
+- the second represents whether the client is communicating with  VRChat fine
+Next, there should be a timestamp that shows the last interaction with the app back-end.
+Next, there should be a status message indicating current state - operational or whever the last failure was.
+}
+
+A horizontal quick-user-statuses line--
+{
+This is meant to represent the current state of each user by showing a small horizonal list of per-user areas - one per user.
+Each user area should show the users icon with the user's human-readable token (HRToken) underneigth.
+Each  user area should hae an be outlined in a color representing status { light-green (online in VRC), grey (offline), mid-to-darker-yellow (other status), red (error getting status) }
+The user status areas should be shown in the same order as the list from the json config file.
+If the list is longer than the display, it should wrap - but otherwise should try to fit within as few lines as possible without changing the status area sizes
+}
+
+A larger running timeling graph block that fills browser horizontally and fills extra/remaining area vertically--
+{
+This area is meant to indicate user status across time.
+At the top there should be a config/info line - there should be a drop-down on the left that specifies seconds per pixel - defaulting to 1.  The select should match the size of the id areas on the user lines noted below.  To the right should be a graph area that shows vertical lines per the start of each minute, start of each hour, start of each day - with different color per minute/hour-day with the later dominating the former (so you can see day marks over hours marks, hour marks over minute marks).
+Each user status will be a horizontal portion of the area - with an id area - a smaller version of the user-icon followed by the name - followed by a horizonal graph of status colors across time, with the more recent time to the left, flowing back in time toward the right.
+The id areas should be the same size and the timeline areas should be the same size (so each users time history matches timewise vertically).
+Each horizontal pixel of the timeline should show the status of the user during that period - these shold be expanded for the whole height of the user area - thus changes are indicated horizontally.
+The timeline should move to the right with the scaled time and with status changes as time progresses - so, ex, if each pixel represents a second, the graph should slide to the right each second - if a minute, then each minute.
+The left-most new areas exposed should represent the last known status - so, if user-X was online at least check, then the online color should be used.
+There should be a line between each user line as well as between the top line and the first user line.
+}
+
+The app back-end should load the user config and monitor each of users per the specific polling rate.
+When a client connects the back-end should send the interface (web UI) which should connect and, on first connect should receive the current history.
+Then the client should remain connected for push based updates.  (If the client connection fails, it should reconnect request any updates since/including it's last poll time - the client should merge the changes with any info it contains)
+As the back-end receives updates, it should notify each client of changes, at which point the client would update it's UI.
+
+Please break-apart the code to separate concerns - for example separte performing of VRChat ops from the polling code from the current state repository from the client handlers calling these, etc. 

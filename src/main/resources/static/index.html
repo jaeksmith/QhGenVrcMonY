@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VRChat Monitor</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="status-line" class="collapsed">
+        <div class="status-bar">
+            <div class="section-toggle collapsed" id="status-section-toggle" title="Expand/Collapse Status Section"></div>
+            <button id="refresh-button" title="Refresh Current State">&#x21bb;</button> <!-- Unicode refresh symbol -->
+            <span id="websocket-status" class="status-dot" title="WebSocket Connection Status"></span>
+            <span id="backend-status" class="status-dot" title="Backend API Status"></span>
+            <span id="last-update-time">Last Update: --:--:--</span>
+            <span id="status-message">Connecting...</span>
+        </div>
+        <div id="future-output-area">&lt;future output area&gt;</div>
+    </div>
+
+    <div id="quick-status-bar" class="collapsed">
+        <div class="section-toggle dark collapsed" id="quick-status-section-toggle" title="Expand/Collapse Quick Status Section"></div>
+        <!-- User status items will be added here by JavaScript -->
+    </div>
+
+    <div id="timeline-container" class="expanded">
+        <div id="timeline-header">
+            <div class="timeline-header-section id-area">
+                 <div class="section-toggle dark expanded" id="timeline-section-toggle" title="Expand/Collapse History Section"></div>
+                 <span class="history-label">History</span>
+                 <label for="time-scale-select">Scale:</label>
+                 <select id="time-scale-select">
+                    <option value="1">1s/px</option>
+                    <option value="5">5s/px</option>
+                    <option value="15">15s/px</option>
+                    <option value="30">30s/px</option>
+                    <option value="60">1m/px</option>
+                    <option value="300">5m/px</option>
+                 </select>
+            </div>
+            <div class="timeline-header-section graph-area" id="timeline-axis">
+                <!-- Time axis markers will be drawn here (potentially with Canvas or divs) -->
+                 <span>Time Axis Placeholder</span>
+            </div>
+        </div>
+        <div id="timeline-users">
+             <!-- User timeline rows will be added here by JavaScript -->
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html> 

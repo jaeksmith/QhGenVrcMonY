@@ -1,0 +1,34 @@
+{
+  "users": [
+   {
+      "hrToken": "Jaek",
+      "vrcUid": "uffbQ8SG1t",
+      "pollRate": "19m37s",
+      "announceVolumeMult": "0.3"
+    },
+    {
+      "hrToken": "JaekExt1",
+      "vrcUid": "usr_b08a3ad5-57b3-404e-83a9-54c3f0cd59b1",
+      "pollRate": "13m57s",
+      "announceVolumeMult": "0.1"
+    },
+    {
+      "hrToken": "JaekExt2",
+      "vrcUid": "usr_84c1d4b7-b15c-4b39-89a4-75b9f5064130",
+      "pollRate": "15m39s",
+      "announceVolumeMult": "0.1"
+    },  
+    {
+      "hrToken": "JaekExt3",
+      "vrcUid": "usr_5f474710-ee0b-4474-8cba-9cb0d5efd1fc",
+      "pollRate": "17m33s",
+      "announceVolumeMult": "0.1"
+    },
+    {
+      "hrToken": "JaekExt4",
+      "vrcUid": "usr_d0b248ab-3fa1-44fc-b148-6e093ea3538f",
+      "pollRate": "19m11s",
+      "announceVolumeMult": "0.1"
+    }
+  ]
+}
