@@ -16,7 +16,39 @@
             <span id="last-update-time">Last Update: --:--:--</span>
             <span id="status-message">Connecting...</span>
         </div>
-        <div id="future-output-area">&lt;future output area&gt;</div>
+        <div id="control-panel-container">
+            <div class="tab-buttons">
+                <button class="tab-button active" data-tab="log-console">Log Console</button>
+                <button class="tab-button" data-tab="admin-ops">Admin Ops</button>
+            </div>
+            <div class="tab-content">
+                <div id="log-console" class="tab-pane active">
+                    <div class="filter-line">
+                        <label><input type="checkbox" checked> This Client Requests</label>
+                        <label><input type="checkbox" checked> This Client Responses</label>
+                        <label><input type="checkbox" checked> Server Requests</label>
+                        <label><input type="checkbox" checked> Server Responses</label>
+                    </div>
+                    <div class="log-console-output">
+                        <!-- Simulated log lines will be added here -->
+                    </div>
+                </div>
+                <div id="admin-ops" class="tab-pane">
+                    <div class="admin-controls">
+                        <div class="uptime-display">
+                            <span>Uptime: </span>
+                            <span id="uptime-days">0</span> days,
+                            <span id="uptime-hours">0</span> hours,
+                            <span id="uptime-seconds">0</span> seconds
+                        </div>
+                        <div class="admin-buttons">
+                            <button id="shutdown-server-btn">Shutdown Server</button>
+                            <button id="test-announce-btn">Test Announce</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="quick-status-bar" class="collapsed">

@@ -9,6 +9,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let statusMessage = 'Initializing...';
     let timeScale = 1; // Default seconds per pixel
 
+    // Tab handling variables
+    const tabButtons = document.querySelectorAll('.tab-button');
+    const tabPanes = document.querySelectorAll('.tab-pane');
+    const logConsoleOutput = document.querySelector('.log-console-output');
+    
+    // For uptime simulation
+    let startTime = new Date();
+    let uptimeInterval;
+
     // --- DOM Elements ---
     const websocketStatusDot = document.getElementById('websocket-status');
     const backendStatusDot = document.getElementById('backend-status');
@@ -426,12 +435,144 @@ document.addEventListener('DOMContentLoaded', () => {
             section.classList.add('collapsed');
             toggle.classList.remove('expanded');
             toggle.classList.add('collapsed');
+            
+            // Stop uptime interval when closing
+            if (section === statusLineSection && uptimeInterval) {
+                clearInterval(uptimeInterval);
+                uptimeInterval = null;
+            }
         } else {
             section.classList.remove('collapsed');
             section.classList.add('expanded');
             toggle.classList.remove('collapsed');
             toggle.classList.add('expanded');
+            
+            // Start uptime interval and populate log console when opening
+            if (section === statusLineSection) {
+                startUptimeCounter();
+                
+                // Only populate log console if it's empty
+                if (logConsoleOutput && logConsoleOutput.children.length === 0) {
+                    populateSimulatedLogs();
+                }
+            }
         }
+    }
+    
+    // --- Tab Handling Functions ---
+    function setupTabHandling() {
+        tabButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                const tabId = button.getAttribute('data-tab');
+                
+                // Update active tab button
+                tabButtons.forEach(btn => btn.classList.remove('active'));
+                button.classList.add('active');
+                
+                // Update active tab pane
+                tabPanes.forEach(pane => {
+                    pane.classList.remove('active');
+                    if (pane.id === tabId) {
+                        pane.classList.add('active');
+                    }
+                });
+            });
+        });
+    }
+    
+    // --- Log Console Functions ---
+    function populateSimulatedLogs() {
+        // Clear existing logs
+        logConsoleOutput.innerHTML = '';
+        
+        // Generate random number of log entries (20-50)
+        const logCount = Math.floor(Math.random() * 30) + 20;
+        
+        // Log types and their prefixes
+        const logTypes = [
+            { type: 'Client Request', prefix: '[CR]', style: 'color: #8af' },
+            { type: 'Client Response', prefix: '[CRes]', style: 'color: #8fa' },
+            { type: 'Server Request', prefix: '[SR]', style: 'color: #f9a' },
+            { type: 'Server Response', prefix: '[SRes]', style: 'color: #fd8' }
+        ];
+        
+        // Sample API endpoints
+        const endpoints = [
+            '/api/users', 
+            '/auth/user', 
+            '/users/usr_123456',
+            '/worlds/wrld_987654',
+            '/auth/twofactorauth/totp/verify',
+            '/users/friends',
+            '/instances/join'
+        ];
+        
+        // Generate log entries
+        for (let i = 0; i < logCount; i++) {
+            const logType = logTypes[Math.floor(Math.random() * logTypes.length)];
+            const endpoint = endpoints[Math.floor(Math.random() * endpoints.length)];
+            const timestamp = new Date(Date.now() - Math.random() * 3600000).toISOString().replace('T', ' ').substr(0, 19);
+            
+            // Create different log line formats
+            let logText = '';
+            const randomFactor = Math.random();
+            
+            if (randomFactor < 0.3) {
+                // Short log line
+                logText = `${timestamp} ${logType.prefix} ${endpoint} - ${Math.floor(Math.random() * 1000)}ms`;
+            } else if (randomFactor < 0.7) {
+                // Medium log line
+                logText = `${timestamp} ${logType.prefix} ${endpoint} - Status: ${Math.random() < 0.9 ? 200 : 404} - Response time: ${Math.floor(Math.random() * 1000)}ms`;
+            } else {
+                // Long log line with JSON
+                const jsonObj = { 
+                    status: Math.random() < 0.9 ? 'success' : 'error',
+                    time: Math.floor(Math.random() * 1000),
+                    data: {
+                        id: `usr_${Math.floor(Math.random() * 1000000)}`,
+                        displayName: `User${Math.floor(Math.random() * 100)}`,
+                        status: ['online', 'offline', 'busy'][Math.floor(Math.random() * 3)],
+                        location: Math.random() < 0.5 ? 'private' : `wrld_${Math.floor(Math.random() * 1000000)}`
+                    }
+                };
+                logText = `${timestamp} ${logType.prefix} ${endpoint} - ${JSON.stringify(jsonObj, null, 2)}`;
+            }
+            
+            // Create and append log entry
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.textContent = logText;
+            logEntry.style = logType.style;
+            logConsoleOutput.appendChild(logEntry);
+        }
+        
+        // Scroll to bottom
+        logConsoleOutput.scrollTop = logConsoleOutput.scrollHeight;
+    }
+    
+    // --- Admin Functions ---
+    function startUptimeCounter() {
+        if (uptimeInterval) {
+            clearInterval(uptimeInterval);
+        }
+        
+        const updateUptime = () => {
+            const now = new Date();
+            const diff = now - startTime;
+            
+            const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+            
+            document.getElementById('uptime-days').textContent = days;
+            document.getElementById('uptime-hours').textContent = hours;
+            document.getElementById('uptime-seconds').textContent = `${minutes}m ${seconds}s`;
+        };
+        
+        // Update immediately and then every second
+        updateUptime();
+        uptimeInterval = setInterval(updateUptime, 1000);
     }
     
     // --- Initialize Section States ---
@@ -454,11 +595,30 @@ document.addEventListener('DOMContentLoaded', () => {
         timelineSectionToggle.classList.remove('collapsed');
         timelineSectionToggle.classList.add('expanded');
     }
-
-    // --- Initial Connection ---
-    // Set initial section states
-    initializeSectionStates();
     
-    // Connect to WebSocket
-    connectWebSocket();
+    // --- Initialize Everything ---
+    function initialize() {
+        // Set up tab handling
+        setupTabHandling();
+        
+        // Set up admin button click handlers
+        document.getElementById('shutdown-server-btn').addEventListener('click', () => {
+            if (confirm('Are you sure you want to shut down the server?')) {
+                alert('Server shutdown command would be sent here.');
+            }
+        });
+        
+        document.getElementById('test-announce-btn').addEventListener('click', () => {
+            alert('Test announcement would be triggered here.');
+        });
+        
+        // Initialize section states
+        initializeSectionStates();
+        
+        // Connect to WebSocket
+        connectWebSocket();
+    }
+    
+    // Start initialization
+    initialize();
 }); 
