@@ -609,7 +609,30 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         
         document.getElementById('test-announce-btn').addEventListener('click', () => {
-            alert('Test announcement would be triggered here.');
+            // Test the speech announcement functionality at different volumes
+            if (typeof synth === 'undefined') {
+                alert('Speech synthesis is not supported in your browser!');
+                return;
+            }
+            
+            // Function to speak a test phrase at a given volume
+            const speakTestPhrase = (status, volume) => {
+                const utterance = new SpeechSynthesisUtterance(`Test user is now ${status}.`);
+                utterance.volume = volume;
+                log('info', `Test announcement: "${utterance.text}" at volume ${volume}`);
+                synth.speak(utterance);
+                
+                // Add a slight delay between announcements
+                return new Promise(resolve => setTimeout(resolve, 100));
+            };
+            
+            // Queue the test announcements in sequence with different volumes
+            // We use async/await to create small gaps between announcements
+            (async () => {
+                await speakTestPhrase('online', 1.0);
+                await speakTestPhrase('offline', 0.66);
+                await speakTestPhrase('on website', 0.33);
+            })();
         });
         
         // Initialize section states
