@@ -15,6 +15,7 @@ public class WsMessageDTO {
         INITIAL_STATE, // For sending snapshot on connect
         USER_UPDATE,   // For broadcasting a single user change
         ERROR,         // For sending general backend errors
-        CLIENT_REQUEST // Placeholder for potential client->server messages
+        CLIENT_REQUEST, // Placeholder for potential client->server messages
+        SYSTEM        // For system-level messages like shutdown notifications
     }
 } 

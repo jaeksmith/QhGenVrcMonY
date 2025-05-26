@@ -382,6 +382,32 @@ document.addEventListener('DOMContentLoaded', () => {
                          }
                          renderStatusLine(); 
                         break;
+                    case 'SYSTEM':
+                        log('info', `Processing SYSTEM message: ${JSON.stringify(message.payload)}`);
+                        if (message.payload && message.payload.action === 'SHUTDOWN') {
+                            // Display shutdown message
+                            const shutdownMessage = document.createElement('div');
+                            shutdownMessage.className = 'shutdown-message';
+                            shutdownMessage.innerHTML = '<h3>Server Shutdown In Progress</h3>' + 
+                                '<p>The server is shutting down by administrator request.</p>' +
+                                '<p>This page will no longer be functional. You may close this window.</p>';
+                            document.body.appendChild(shutdownMessage);
+                            
+                            // Disable all interactive elements
+                            document.getElementById('shutdown-server-btn').disabled = true;
+                            document.getElementById('refresh-button').disabled = true;
+                            
+                            // Update status
+                            connectionStatus = 'closed';
+                            statusMessage = 'Server is shutting down...';
+                            renderStatusLine();
+                            
+                            // Don't attempt to reconnect
+                            websocket.onclose = () => {
+                                log('info', 'WebSocket closed due to server shutdown.');
+                            };
+                        }
+                        break;
                     case 'ERROR':
                          log('error', `Received backend error: ${JSON.stringify(message.payload)}`);
                          statusMessage = `Backend Error: ${message.payload.message || 'Unknown'}`;
@@ -603,10 +629,11 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Set up admin button click handlers
         document.getElementById('shutdown-server-btn').addEventListener('click', () => {
-            if (confirm('Are you sure you want to shut down the server?')) {
-                alert('Server shutdown command would be sent here.');
-            }
+            showShutdownConfirmation();
         });
+        
+        // Setup shutdown confirmation dialog
+        setupShutdownDialog();
         
         document.getElementById('test-announce-btn').addEventListener('click', () => {
             // Test the speech announcement functionality at different volumes
@@ -640,6 +667,68 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Connect to WebSocket
         connectWebSocket();
+    }
+    
+    // --- Shutdown Dialog Functions ---
+    function setupShutdownDialog() {
+        const dialog = document.getElementById('confirm-dialog');
+        const confirmYesBtn = document.getElementById('confirm-yes');
+        const confirmNoBtn = document.getElementById('confirm-no');
+        
+        confirmYesBtn.addEventListener('click', () => {
+            sendShutdownRequest();
+            hideShutdownConfirmation();
+        });
+        
+        confirmNoBtn.addEventListener('click', () => {
+            hideShutdownConfirmation();
+        });
+        
+        // Close dialog if clicked outside of it
+        dialog.addEventListener('click', (event) => {
+            if (event.target === dialog) {
+                hideShutdownConfirmation();
+            }
+        });
+    }
+    
+    function showShutdownConfirmation() {
+        const dialog = document.getElementById('confirm-dialog');
+        dialog.style.display = 'flex';
+    }
+    
+    function hideShutdownConfirmation() {
+        const dialog = document.getElementById('confirm-dialog');
+        dialog.style.display = 'none';
+    }
+    
+    function sendShutdownRequest() {
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+            log('info', 'Sending SHUTDOWN request to server...');
+            statusMessage = 'Shutting down server...';
+            renderStatusLine();
+            
+            // Send shutdown command via WebSocket
+            websocket.send(JSON.stringify({
+                type: 'COMMAND',
+                command: 'SHUTDOWN'
+            }));
+            
+            // Display a message to the user
+            const shutdownMessage = document.createElement('div');
+            shutdownMessage.className = 'shutdown-message';
+            shutdownMessage.innerHTML = '<h3>Server Shutdown Initiated</h3>' + 
+                '<p>The server is shutting down. This page will no longer be functional.</p>' +
+                '<p>You may close this window.</p>';
+            document.body.appendChild(shutdownMessage);
+            
+            // Disable controls
+            document.getElementById('shutdown-server-btn').disabled = true;
+            document.getElementById('refresh-button').disabled = true;
+        } else {
+            log('error', 'Cannot send shutdown request: WebSocket not connected');
+            alert('Cannot send shutdown request: Not connected to server.');
+        }
     }
     
     // Start initialization

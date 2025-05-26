@@ -91,15 +91,67 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         String payload = message.getPayload();
         log.info("Received WebSocket message from {}: {}", session.getId(), payload);
-        // Handle incoming messages (e.g., refresh request)
-        // For now, just echoing back as an example
-         // WsMessageDTO response = new WsMessageDTO(WsMessageDTO.MessageType.ECHO, "Received: " + payload);
-         // sendMessage(session, response);
-         // TODO: Implement actual message handling if needed (like refresh)
-         if ("REFRESH".equalsIgnoreCase(payload)) {
-              log.info("Processing REFRESH request from session: {}", session.getId());
-              sendInitialState(session); // Resend current state
-         }
+        
+        // Check if it's a JSON message with a command
+        if (payload.startsWith("{")) {
+            try {
+                Map<String, Object> commandMap = objectMapper.readValue(payload, Map.class);
+                if ("COMMAND".equals(commandMap.get("type")) && "SHUTDOWN".equals(commandMap.get("command"))) {
+                    handleShutdownCommand(session);
+                    return;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to parse JSON command: {}", e.getMessage());
+                // Continue with regular message processing
+            }
+        }
+        
+        // Handle regular text messages
+        if ("REFRESH".equalsIgnoreCase(payload)) {
+             log.info("Processing REFRESH request from session: {}", session.getId());
+             sendInitialState(session); // Resend current state
+        }
+    }
+    
+    private void handleShutdownCommand(WebSocketSession session) {
+        log.warn("SHUTDOWN command received from session: {}", session.getId());
+        
+        // Notify all clients about the shutdown
+        WsMessageDTO shutdownMessage = new WsMessageDTO(
+            WsMessageDTO.MessageType.SYSTEM, 
+            Map.of(
+                "action", "SHUTDOWN",
+                "message", "Server is shutting down by administrator request."
+            )
+        );
+        
+        broadcastMessage(shutdownMessage);
+        
+        // Close all WebSocket sessions gracefully
+        for (WebSocketSession ws : sessions) {
+            try {
+                ws.close(CloseStatus.GOING_AWAY);
+            } catch (IOException e) {
+                log.error("Error closing WebSocket session during shutdown: {}", e.getMessage());
+            }
+        }
+        
+        // Schedule actual application shutdown
+        log.warn("Initiating server shutdown sequence...");
+        
+        // Use a separate thread to allow current request to complete
+        new Thread(() -> {
+            try {
+                // Give clients time to receive the close message
+                Thread.sleep(1000);
+                
+                log.warn("Executing shutdown...");
+                System.exit(0);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.error("Shutdown sequence interrupted", e);
+            }
+        }, "ShutdownThread").start();
     }
 
     @Override
