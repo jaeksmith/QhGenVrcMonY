@@ -14,6 +14,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const tabPanes = document.querySelectorAll('.tab-pane');
     const logConsoleOutput = document.querySelector('.log-console-output');
     
+    // Log filter checkboxes
+    const clientRequestsCheckbox = document.querySelector('input[type="checkbox"][data-filter="client-requests"]');
+    const clientResponsesCheckbox = document.querySelector('input[type="checkbox"][data-filter="client-responses"]');
+    const serverRequestsCheckbox = document.querySelector('input[type="checkbox"][data-filter="server-requests"]');
+    const serverResponsesCheckbox = document.querySelector('input[type="checkbox"][data-filter="server-responses"]');
+    
+    // Log storage - keeps logs in memory until they're displayed
+    const logEntries = {
+        clientRequests: [],
+        clientResponses: [],
+        serverRequests: [],
+        serverResponses: []
+    };
+    
+    // Maximum number of logs to store per category
+    const MAX_LOGS_PER_CATEGORY = 100;
+    
     // For uptime simulation
     let startTime = new Date();
     let uptimeInterval;
@@ -295,7 +312,9 @@ document.addEventListener('DOMContentLoaded', () => {
             connectionStatus = 'open';
             statusMessage = 'Connected. Waiting for initial state...';
             updateUI();
-            // No need to send anything, server sends initial state automatically
+            
+            // Log client-side connection
+            addLogEntry('client-request', `WebSocket connection opened to ${wsUri}`);
         };
 
         websocket.onclose = (event) => {
@@ -304,6 +323,10 @@ document.addEventListener('DOMContentLoaded', () => {
             statusMessage = `Disconnected: ${event.reason || 'Connection closed'}`;
             backendApiStatus = 'unknown';
             updateUI();
+            
+            // Log client-side disconnection
+            addLogEntry('client-response', `WebSocket connection closed: Code=${event.code}, Reason='${event.reason}'`);
+            
             // Simple reconnect attempt after a delay
             setTimeout(connectWebSocket, 5000); 
         };
@@ -314,6 +337,10 @@ document.addEventListener('DOMContentLoaded', () => {
             connectionStatus = 'error';
             statusMessage = 'Connection error!';
             backendApiStatus = 'unknown';
+            
+            // Log client-side error
+            addLogEntry('client-response', 'WebSocket connection error');
+            
             // Don't update UI immediately on error, wait for onclose to trigger reconnect logic
         };
 
@@ -321,6 +348,9 @@ document.addEventListener('DOMContentLoaded', () => {
             log('debug', `WebSocket message received: ${event.data}`);
             lastUpdateTime = new Date().toISOString(); // Track last interaction
             statusMessage = 'Operational'; // Assume operational if messages are coming
+            
+            // Log client-side message reception
+            addLogEntry('client-response', `Received: ${event.data}`);
 
             try {
                 const message = JSON.parse(event.data);
@@ -408,6 +438,17 @@ document.addEventListener('DOMContentLoaded', () => {
                             };
                         }
                         break;
+                    case 'LOG_ENTRY':
+                        // Handle server-side logs
+                        if (message.payload) {
+                            const logData = message.payload;
+                            if (logData.type === 'request') {
+                                addLogEntry('server-request', logData.content, new Date(logData.timestamp));
+                            } else if (logData.type === 'response') {
+                                addLogEntry('server-response', logData.content, new Date(logData.timestamp));
+                            }
+                        }
+                        break;
                     case 'ERROR':
                          log('error', `Received backend error: ${JSON.stringify(message.payload)}`);
                          statusMessage = `Backend Error: ${message.payload.message || 'Unknown'}`;
@@ -439,9 +480,11 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshButton.addEventListener('click', () => {
         if (websocket && websocket.readyState === WebSocket.OPEN) {
             log('info', 'Sending REFRESH request...');
+            addLogEntry('client-request', 'Sending REFRESH command to server');
             websocket.send('REFRESH');
         } else {
             log('warn', 'Cannot refresh: WebSocket not connected.');
+            addLogEntry('client-request', 'Attempted REFRESH but WebSocket not connected', new Date());
         }
     });
 
@@ -622,10 +665,263 @@ document.addEventListener('DOMContentLoaded', () => {
         timelineSectionToggle.classList.add('expanded');
     }
     
+    // --- Logging Functions ---
+    function sanitizeLogContent(content) {
+        if (!content) return content;
+        
+        // Convert to string if it's not already
+        const str = typeof content === 'string' ? content : JSON.stringify(content);
+        
+        // Patterns for sensitive information
+        const sensitivePatterns = [
+            // Password pattern (simple version)
+            { regex: /"password"\s*:\s*"[^"]*"/gi, replacement: '"password":"###PASSWORD###"' },
+            { regex: /password=[^&\s]*/gi, replacement: 'password=###PASSWORD###' },
+            
+            // Auth cookies and tokens
+            { regex: /"auth(?:Token|Cookie)?"\s*:\s*"[^"]*"/gi, replacement: '"authToken":"###AUTH_TOKEN###"' },
+            { regex: /auth(?:Token|Cookie)?=[^&\s]*/gi, replacement: 'authToken=###AUTH_TOKEN###' },
+            
+            // Session tokens
+            { regex: /"session(?:Token|Id)?"\s*:\s*"[^"]*"/gi, replacement: '"sessionToken":"###SESSION_TOKEN###"' },
+            { regex: /session(?:Token|Id)?=[^&\s]*/gi, replacement: 'sessionToken=###SESSION_TOKEN###' },
+            
+            // API keys
+            { regex: /"api[_-]?key"\s*:\s*"[^"]*"/gi, replacement: '"api_key":"###API_KEY###"' },
+            { regex: /api[_-]?key=[^&\s]*/gi, replacement: 'api_key=###API_KEY###' },
+            
+            // 2FA cookies
+            { regex: /"twoFactorAuth(?:Token|Cookie)?"\s*:\s*"[^"]*"/gi, replacement: '"twoFactorAuth":"###2FA_TOKEN###"' },
+            { regex: /twoFactorAuth(?:Token|Cookie)?=[^&\s]*/gi, replacement: 'twoFactorAuth=###2FA_TOKEN###' },
+            
+            // Basic auth headers
+            { regex: /Basic\s+[A-Za-z0-9+/=]+/gi, replacement: 'Basic ###BASIC_AUTH###' },
+            
+            // Bearer tokens
+            { regex: /Bearer\s+[A-Za-z0-9_.-]+/gi, replacement: 'Bearer ###BEARER_TOKEN###' }
+        ];
+        
+        // Apply all sanitization patterns
+        let sanitized = str;
+        sensitivePatterns.forEach(pattern => {
+            sanitized = sanitized.replace(pattern.regex, pattern.replacement);
+        });
+        
+        return sanitized;
+    }
+    
+    function addLogEntry(type, content, timestamp = new Date()) {
+        // Sanitize content before storing
+        const sanitizedContent = sanitizeLogContent(content);
+        
+        // Create log entry object
+        const logEntry = {
+            timestamp: timestamp,
+            content: sanitizedContent
+        };
+        
+        // Add to appropriate log array
+        switch (type) {
+            case 'client-request':
+                logEntries.clientRequests.push(logEntry);
+                // Trim if exceeds max size
+                if (logEntries.clientRequests.length > MAX_LOGS_PER_CATEGORY) {
+                    logEntries.clientRequests.shift();
+                }
+                break;
+            case 'client-response':
+                logEntries.clientResponses.push(logEntry);
+                if (logEntries.clientResponses.length > MAX_LOGS_PER_CATEGORY) {
+                    logEntries.clientResponses.shift();
+                }
+                break;
+            case 'server-request':
+                logEntries.serverRequests.push(logEntry);
+                if (logEntries.serverRequests.length > MAX_LOGS_PER_CATEGORY) {
+                    logEntries.serverRequests.shift();
+                }
+                break;
+            case 'server-response':
+                logEntries.serverResponses.push(logEntry);
+                if (logEntries.serverResponses.length > MAX_LOGS_PER_CATEGORY) {
+                    logEntries.serverResponses.shift();
+                }
+                break;
+        }
+        
+        // Update log display if log console is visible
+        if (statusLineSection.classList.contains('expanded') && 
+            document.getElementById('log-console').classList.contains('active')) {
+            updateLogConsole();
+        }
+    }
+    
+    function updateLogConsole() {
+        // Clear current logs
+        logConsoleOutput.innerHTML = '';
+        
+        // Collect logs based on checkbox filters
+        let logsToShow = [];
+        
+        if (clientRequestsCheckbox && clientRequestsCheckbox.checked) {
+            logEntries.clientRequests.forEach(entry => {
+                logsToShow.push({
+                    timestamp: entry.timestamp,
+                    type: 'client-request',
+                    content: entry.content,
+                    style: 'color: #8af'
+                });
+            });
+        }
+        
+        if (clientResponsesCheckbox && clientResponsesCheckbox.checked) {
+            logEntries.clientResponses.forEach(entry => {
+                logsToShow.push({
+                    timestamp: entry.timestamp,
+                    type: 'client-response',
+                    content: entry.content,
+                    style: 'color: #8fa'
+                });
+            });
+        }
+        
+        if (serverRequestsCheckbox && serverRequestsCheckbox.checked) {
+            logEntries.serverRequests.forEach(entry => {
+                logsToShow.push({
+                    timestamp: entry.timestamp,
+                    type: 'server-request',
+                    content: entry.content,
+                    style: 'color: #f9a'
+                });
+            });
+        }
+        
+        if (serverResponsesCheckbox && serverResponsesCheckbox.checked) {
+            logEntries.serverResponses.forEach(entry => {
+                logsToShow.push({
+                    timestamp: entry.timestamp,
+                    type: 'server-response',
+                    content: entry.content,
+                    style: 'color: #fd8'
+                });
+            });
+        }
+        
+        // Sort logs by timestamp
+        logsToShow.sort((a, b) => a.timestamp - b.timestamp);
+        
+        // Create and append log entries
+        logsToShow.forEach(log => {
+            const logElement = document.createElement('div');
+            logElement.className = 'log-entry';
+            logElement.style = log.style;
+            
+            // Format timestamp
+            const timestamp = log.timestamp.toISOString().replace('T', ' ').substr(0, 19);
+            
+            // Create prefix based on type
+            let prefix;
+            switch (log.type) {
+                case 'client-request':
+                    prefix = '[CR]';
+                    break;
+                case 'client-response':
+                    prefix = '[CRes]';
+                    break;
+                case 'server-request':
+                    prefix = '[SR]';
+                    break;
+                case 'server-response':
+                    prefix = '[SRes]';
+                    break;
+            }
+            
+            logElement.textContent = `${timestamp} ${prefix} ${log.content}`;
+            logConsoleOutput.appendChild(logElement);
+        });
+        
+        // Scroll to bottom if we're adding new content
+        if (logsToShow.length > 0) {
+            logConsoleOutput.scrollTop = logConsoleOutput.scrollHeight;
+        }
+    }
+
+    // --- Shutdown Dialog Functions ---
+    function setupShutdownDialog() {
+        const dialog = document.getElementById('confirm-dialog');
+        const confirmYesBtn = document.getElementById('confirm-yes');
+        const confirmNoBtn = document.getElementById('confirm-no');
+        
+        confirmYesBtn.addEventListener('click', () => {
+            sendShutdownRequest();
+            hideShutdownConfirmation();
+        });
+        
+        confirmNoBtn.addEventListener('click', () => {
+            hideShutdownConfirmation();
+        });
+        
+        // Close dialog if clicked outside of it
+        dialog.addEventListener('click', (event) => {
+            if (event.target === dialog) {
+                hideShutdownConfirmation();
+            }
+        });
+    }
+    
+    function showShutdownConfirmation() {
+        const dialog = document.getElementById('confirm-dialog');
+        dialog.style.display = 'flex';
+    }
+    
+    function hideShutdownConfirmation() {
+        const dialog = document.getElementById('confirm-dialog');
+        dialog.style.display = 'none';
+    }
+
+    // Function to send shutdown command - modified to log client request
+    function sendShutdownRequest() {
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+            log('info', 'Sending SHUTDOWN request to server...');
+            statusMessage = 'Shutting down server...';
+            renderStatusLine();
+            
+            // Create command object
+            const shutdownCommand = {
+                type: 'COMMAND',
+                command: 'SHUTDOWN'
+            };
+            
+            // Log client request
+            addLogEntry('client-request', `Sending command: ${JSON.stringify(shutdownCommand)}`);
+            
+            // Send shutdown command via WebSocket
+            websocket.send(JSON.stringify(shutdownCommand));
+            
+            // Display a message to the user
+            const shutdownMessage = document.createElement('div');
+            shutdownMessage.className = 'shutdown-message';
+            shutdownMessage.innerHTML = '<h3>Server Shutdown Initiated</h3>' + 
+                '<p>The server is shutting down. This page will no longer be functional.</p>' +
+                '<p>You may close this window.</p>';
+            document.body.appendChild(shutdownMessage);
+            
+            // Disable controls
+            document.getElementById('shutdown-server-btn').disabled = true;
+            document.getElementById('refresh-button').disabled = true;
+        } else {
+            log('error', 'Cannot send shutdown request: WebSocket not connected');
+            alert('Cannot send shutdown request: Not connected to server.');
+        }
+    }
+    
     // --- Initialize Everything ---
     function initialize() {
         // Set up tab handling
         setupTabHandling();
+        
+        // Set up log filters
+        setupLogFilters();
         
         // Set up admin button click handlers
         document.getElementById('shutdown-server-btn').addEventListener('click', () => {
@@ -669,65 +965,20 @@ document.addEventListener('DOMContentLoaded', () => {
         connectWebSocket();
     }
     
-    // --- Shutdown Dialog Functions ---
-    function setupShutdownDialog() {
-        const dialog = document.getElementById('confirm-dialog');
-        const confirmYesBtn = document.getElementById('confirm-yes');
-        const confirmNoBtn = document.getElementById('confirm-no');
-        
-        confirmYesBtn.addEventListener('click', () => {
-            sendShutdownRequest();
-            hideShutdownConfirmation();
-        });
-        
-        confirmNoBtn.addEventListener('click', () => {
-            hideShutdownConfirmation();
-        });
-        
-        // Close dialog if clicked outside of it
-        dialog.addEventListener('click', (event) => {
-            if (event.target === dialog) {
-                hideShutdownConfirmation();
-            }
-        });
-    }
-    
-    function showShutdownConfirmation() {
-        const dialog = document.getElementById('confirm-dialog');
-        dialog.style.display = 'flex';
-    }
-    
-    function hideShutdownConfirmation() {
-        const dialog = document.getElementById('confirm-dialog');
-        dialog.style.display = 'none';
-    }
-    
-    function sendShutdownRequest() {
-        if (websocket && websocket.readyState === WebSocket.OPEN) {
-            log('info', 'Sending SHUTDOWN request to server...');
-            statusMessage = 'Shutting down server...';
-            renderStatusLine();
-            
-            // Send shutdown command via WebSocket
-            websocket.send(JSON.stringify({
-                type: 'COMMAND',
-                command: 'SHUTDOWN'
-            }));
-            
-            // Display a message to the user
-            const shutdownMessage = document.createElement('div');
-            shutdownMessage.className = 'shutdown-message';
-            shutdownMessage.innerHTML = '<h3>Server Shutdown Initiated</h3>' + 
-                '<p>The server is shutting down. This page will no longer be functional.</p>' +
-                '<p>You may close this window.</p>';
-            document.body.appendChild(shutdownMessage);
-            
-            // Disable controls
-            document.getElementById('shutdown-server-btn').disabled = true;
-            document.getElementById('refresh-button').disabled = true;
-        } else {
-            log('error', 'Cannot send shutdown request: WebSocket not connected');
-            alert('Cannot send shutdown request: Not connected to server.');
+    // --- Log Console Functions ---
+    function setupLogFilters() {
+        // Add event listeners to filter checkboxes
+        if (clientRequestsCheckbox) {
+            clientRequestsCheckbox.addEventListener('change', updateLogConsole);
+        }
+        if (clientResponsesCheckbox) {
+            clientResponsesCheckbox.addEventListener('change', updateLogConsole);
+        }
+        if (serverRequestsCheckbox) {
+            serverRequestsCheckbox.addEventListener('change', updateLogConsole);
+        }
+        if (serverResponsesCheckbox) {
+            serverResponsesCheckbox.addEventListener('change', updateLogConsole);
         }
     }
     

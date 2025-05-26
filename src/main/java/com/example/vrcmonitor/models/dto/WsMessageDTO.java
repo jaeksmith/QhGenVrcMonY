@@ -16,6 +16,7 @@ public class WsMessageDTO {
         USER_UPDATE,   // For broadcasting a single user change
         ERROR,         // For sending general backend errors
         CLIENT_REQUEST, // Placeholder for potential client->server messages
-        SYSTEM        // For system-level messages like shutdown notifications
+        SYSTEM,        // For system-level messages like shutdown notifications
+        LOG_ENTRY      // For sending API log entries to clients
     }
 } 

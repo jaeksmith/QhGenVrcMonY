@@ -3,6 +3,7 @@ package com.example.vrcmonitor.web;
 import com.example.vrcmonitor.config.AppConfig;
 import com.example.vrcmonitor.config.ConfigLoader;
 import com.example.vrcmonitor.config.UserConfig;
+import com.example.vrcmonitor.models.dto.LogEntryDTO;
 import com.example.vrcmonitor.models.dto.StatusUpdateDTO;
 import com.example.vrcmonitor.models.dto.WsMessageDTO;
 import com.example.vrcmonitor.services.UserStateService;
@@ -198,6 +199,17 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
         );
 
         WsMessageDTO message = new WsMessageDTO(WsMessageDTO.MessageType.USER_UPDATE, payload);
+        broadcastMessage(message);
+    }
+
+    /**
+     * Broadcasts a log entry to all connected WebSocket clients
+     * @param logEntry The log entry to broadcast
+     */
+    public void broadcastLogEntry(LogEntryDTO logEntry) {
+        if (logEntry == null) return;
+        
+        WsMessageDTO message = new WsMessageDTO(WsMessageDTO.MessageType.LOG_ENTRY, logEntry);
         broadcastMessage(message);
     }
 

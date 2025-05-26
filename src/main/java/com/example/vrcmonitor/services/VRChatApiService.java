@@ -2,26 +2,37 @@ package com.example.vrcmonitor.services;
 
 import com.example.vrcmonitor.models.CurrentUser;
 import com.example.vrcmonitor.models.VRChatUser;
+import com.example.vrcmonitor.models.dto.LogEntryDTO;
+import com.example.vrcmonitor.models.dto.WsMessageDTO;
+import com.example.vrcmonitor.web.StatusUpdateHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.ClientRequest;
+import org.springframework.web.reactive.function.client.ClientResponse;
+import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 import java.time.Duration;
 import java.io.Console;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.io.IOException;
 import java.net.SocketException;
 import io.netty.channel.ConnectTimeoutException;
@@ -37,6 +48,10 @@ public class VRChatApiService {
 
     private final WebClient webClient;
     private final ObjectMapper objectMapper;
+    
+    @Lazy
+    @Autowired
+    private StatusUpdateHandler statusUpdateHandler; // Used to broadcast logs
 
     @Getter
     private String authCookie = null; // Holds the current auth cookie (temporary or final)
@@ -50,13 +65,189 @@ public class VRChatApiService {
     private static final Duration MAX_RETRY_BACKOFF = Duration.ofMinutes(10);
 
     public VRChatApiService(WebClient.Builder webClientBuilder, ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+        
+        // Create filter functions to log requests and responses
+        ExchangeFilterFunction requestLoggingFilter = ExchangeFilterFunction.ofRequestProcessor(request -> {
+            logRequest(request);
+            return Mono.just(request);
+        });
+        
+        // Create a filter to log responses with their bodies
+        ExchangeFilterFunction responseLoggingFilter = ExchangeFilterFunction.ofResponseProcessor(response -> {
+            // For headers and status
+            StringBuilder logBuilder = new StringBuilder();
+            logBuilder.append("Status: ").append(response.statusCode().value());
+            
+            // Add headers
+            logBuilder.append("\nHeaders: ");
+            response.headers().asHttpHeaders().forEach((name, values) -> {
+                values.forEach(value -> {
+                    logBuilder.append("\n  ").append(name).append(": ").append(value);
+                });
+            });
+            
+            // Create a Mono that will log the body and then return the original response
+            return response.bodyToMono(String.class)
+                .defaultIfEmpty("")
+                .map(body -> {
+                    // Add body to log if present
+                    if (!body.isEmpty()) {
+                        logBuilder.append("\nBody: ").append(body);
+                    }
+                    
+                    // Sanitize and log
+                    String sanitizedLog = sanitizeLogContent(logBuilder.toString());
+                    log.debug("VRChat API Response: {}", sanitizedLog);
+                    
+                    // Broadcast to clients if handler is available
+                    if (statusUpdateHandler != null) {
+                        LogEntryDTO logEntry = new LogEntryDTO("response", sanitizedLog, Instant.now());
+                        statusUpdateHandler.broadcastLogEntry(logEntry);
+                    }
+                    
+                    // Return the original body text
+                    return body;
+                })
+                .switchIfEmpty(Mono.just(""))
+                .flatMap(body -> {
+                    // Recreate the response with same status, headers, cookies, etc.
+                    // but with the body we already consumed
+                    ClientResponse.Builder builder = ClientResponse.create(response.statusCode());
+                    response.headers().asHttpHeaders().forEach((name, values) -> 
+                        builder.header(name, values.toArray(new String[0])));
+                    response.cookies().forEach((name, cookies) -> 
+                        cookies.forEach(cookie -> builder.cookie(name, cookie.getValue())));
+                    
+                    // Set the body if we have one
+                    if (!body.isEmpty()) {
+                        builder.header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
+                        return Mono.just(builder.body(body).build());
+                    } else {
+                        return Mono.just(builder.build());
+                    }
+                });
+        });
+        
         this.webClient = webClientBuilder.baseUrl(VRC_API_BASE_URL)
                 .defaultHeader(HttpHeaders.USER_AGENT, VRC_USER_AGENT)
                 // Configure cookie handling (should be default, but explicit doesn't hurt)
                 .codecs(configurer -> configurer.defaultCodecs().enableLoggingRequestDetails(true)) // Enable for debugging if needed
+                .filter(requestLoggingFilter)
+                .filter(responseLoggingFilter)
                 .build();
-        this.objectMapper = objectMapper;
+                
         log.debug("VRChatApiService using injected ObjectMapper: {}", objectMapper.hashCode());
+    }
+    
+    /**
+     * Logs an API request and broadcasts it to clients if a WebSocket handler is available
+     */
+    private void logRequest(ClientRequest request) {
+        StringBuilder logBuilder = new StringBuilder();
+        logBuilder.append(request.method().name()).append(" ").append(request.url().toString());
+        
+        // Add headers
+        if (!request.headers().isEmpty()) {
+            logBuilder.append("\nHeaders: ");
+            request.headers().forEach((name, values) -> {
+                values.forEach(value -> {
+                    logBuilder.append("\n  ").append(name).append(": ").append(value);
+                });
+            });
+        }
+        
+        // Log body if available (this might be limited due to how WebClient works)
+        // Note: This is simplified as full body logging requires more complex setup
+        
+        // Sanitize sensitive information
+        String sanitizedLog = sanitizeLogContent(logBuilder.toString());
+        
+        // Log locally
+        log.debug("VRChat API Request: {}", sanitizedLog);
+        
+        // Broadcast to clients if handler is available
+        if (statusUpdateHandler != null) {
+            LogEntryDTO logEntry = new LogEntryDTO("request", sanitizedLog, Instant.now());
+            statusUpdateHandler.broadcastLogEntry(logEntry);
+        }
+    }
+    
+    /**
+     * Sanitizes log content to remove sensitive information
+     */
+    private String sanitizeLogContent(String content) {
+        if (content == null) return null;
+        
+        // List of patterns to sanitize
+        List<Pattern> sensitivePatterns = List.of(
+            // Password
+            Pattern.compile("(?i)(\"password\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(password=)[^&\\s]*"),
+            
+            // Auth cookies and tokens
+            Pattern.compile("(?i)(\"auth(?:Token|Cookie)?\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(auth(?:Token|Cookie)?=)[^&\\s]*"),
+            Pattern.compile("(?i)(auth:\\s*)[^\\s,\\}]*"),
+            
+            // Session tokens
+            Pattern.compile("(?i)(\"session(?:Token|Id)?\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(session(?:Token|Id)?=)[^&\\s]*"),
+            
+            // API keys
+            Pattern.compile("(?i)(\"api[_-]?key\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(api[_-]?key=)[^&\\s]*"),
+            
+            // 2FA cookies
+            Pattern.compile("(?i)(\"twoFactorAuth(?:Token|Cookie)?\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(twoFactorAuth(?:Token|Cookie)?=)[^&\\s]*"),
+            
+            // Basic auth header
+            Pattern.compile("(?i)(Basic\\s+)[A-Za-z0-9+/=]+"),
+            
+            // Bearer tokens
+            Pattern.compile("(?i)(Bearer\\s+)[A-Za-z0-9_.-]+"),
+            
+            // Cookie header often contains sensitive tokens
+            Pattern.compile("(?i)(Cookie:\\s*)[^\\n]*"),
+            
+            // User credentials in JSON
+            Pattern.compile("(?i)(\"username\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"email\"\\s*:\\s*\")[^\"]*(\")"),
+            
+            // Other potential sensitive fields
+            Pattern.compile("(?i)(\"private\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"secret\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"key\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"token\"\\s*:\\s*\")[^\"]*(\")"),
+            
+            // VRChat specific
+            Pattern.compile("(?i)(\"currentAvatarImageUrl\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"currentAvatarThumbnailImageUrl\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"userIcon\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"profilePicOverride\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"fallbackAvatar\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"imageUrl\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"thumbnailImageUrl\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"url\"\\s*:\\s*\")[^\"]*(\")"),
+            Pattern.compile("(?i)(\"tags\"\\s*:\\s*\\[)[^\\]]*?(\\])") // Tags can contain sensitive info
+        );
+        
+        String result = content;
+        for (Pattern pattern : sensitivePatterns) {
+            Matcher matcher = pattern.matcher(result);
+            if (matcher.find()) {
+                if (matcher.groupCount() == 2) {
+                    // Replace only the value part between the capturing groups
+                    result = matcher.replaceAll("$1###REDACTED###$2");
+                } else {
+                    // Replace the entire matched pattern
+                    result = matcher.replaceAll("$1###REDACTED###");
+                }
+            }
+        }
+        
+        return result;
     }
 
     public Mono<LoginResult> login(String username, char[] password) {
