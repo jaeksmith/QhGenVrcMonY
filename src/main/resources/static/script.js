@@ -69,6 +69,15 @@ document.addEventListener('DOMContentLoaded', () => {
         ERROR: 'status-bg-error'
     };
 
+    // Define status priority order (highest to lowest)
+    const statusPriority = {
+        'ONLINE': 0,
+        'ON_WEBSITE': 1,
+        'ERROR': 2,
+        'OFFLINE': 3,
+        'OTHER': 4
+    };
+
     // --- TTS Setup ---
     const synth = window.speechSynthesis;
     let voices = [];
@@ -205,6 +214,41 @@ document.addEventListener('DOMContentLoaded', () => {
         statusMessageSpan.textContent = statusMessage;
     }
 
+    // Helper function to create sortable user array
+    function createSortableUserArray() {
+        const usersToRender = [];
+        
+        userOrder.forEach((uid, index) => {
+            const userStateData = userData.get(uid);
+            if (!userStateData || !userStateData.latestState) return; 
+            
+            const latestState = userStateData.latestState;
+            const displayStatus = determineDisplayStatus(latestState);
+            
+            // Add to array with priority info (index in userOrder = priority from config)
+            usersToRender.push({
+                uid: uid,
+                state: latestState,
+                status: displayStatus,
+                priority: index // Lower index = higher priority
+            });
+        });
+        
+        return usersToRender;
+    }
+    
+    // Helper function to sort users by status and priority
+    function sortUsersByStatusAndPriority(users) {
+        return users.sort((a, b) => {
+            // First compare by status
+            const statusDiff = statusPriority[a.status] - statusPriority[b.status];
+            if (statusDiff !== 0) return statusDiff;
+            
+            // If status is the same, sort by priority (from config)
+            return a.priority - b.priority;
+        });
+    }
+
     function renderQuickStatusBar() {
         // Save the toggle state before clearing
         const wasCollapsed = quickStatusSection.classList.contains('collapsed');
@@ -221,26 +265,26 @@ document.addEventListener('DOMContentLoaded', () => {
         toggle.addEventListener('click', () => toggleSection(quickStatusSection, toggle));
         quickStatusBar.appendChild(toggle);
         
-        userOrder.forEach(uid => {
-            const userStateData = userData.get(uid);
-            if (!userStateData || !userStateData.latestState) return; 
-            const latestState = userStateData.latestState;
-
+        // Create and sort the users array
+        const usersToRender = createSortableUserArray();
+        sortUsersByStatusAndPriority(usersToRender);
+        
+        // Render in sorted order
+        usersToRender.forEach(userData => {
             const item = document.createElement('div');
             item.classList.add('user-status-item');
-            item.dataset.userId = uid; 
+            item.dataset.userId = userData.uid;
 
-            const displayStatus = determineDisplayStatus(latestState);
             Object.values(statusClasses).forEach(cls => item.classList.remove(cls)); 
-            item.classList.add(statusClasses[displayStatus] || statusClasses['OTHER']);
+            item.classList.add(statusClasses[userData.status] || statusClasses['OTHER']);
 
             const img = document.createElement('img');
-            img.src = getUserIconUrl(latestState.user);
-            img.alt = `${latestState.hrToken}'s icon`;
+            img.src = getUserIconUrl(userData.state.user);
+            img.alt = `${userData.state.hrToken}'s icon`;
             img.onerror = () => { img.src = getUserIconUrl(null); }; 
 
             const nameSpan = document.createElement('span');
-            nameSpan.textContent = latestState.hrToken;
+            nameSpan.textContent = userData.state.hrToken;
 
             item.appendChild(img);
             item.appendChild(nameSpan);
@@ -250,46 +294,46 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderTimeline() {
         timelineUsers.innerHTML = ''; 
-         log('info', 'Rendering timeline (basic structure)...');
-         
-         userOrder.forEach(uid => {
-             const userStateData = userData.get(uid);
-             if (!userStateData || !userStateData.latestState) return;
-             const latestState = userStateData.latestState;
+        log('info', 'Rendering timeline (basic structure)...');
+        
+        // Create and sort the users array
+        const usersToRender = createSortableUserArray();
+        sortUsersByStatusAndPriority(usersToRender);
+        
+        // Render in sorted order
+        usersToRender.forEach(userData => {
+            const row = document.createElement('div');
+            row.classList.add('timeline-user-row');
+            row.dataset.userId = userData.uid;
 
-             const row = document.createElement('div');
-             row.classList.add('timeline-user-row');
-             row.dataset.userId = uid;
+            const idArea = document.createElement('div');
+            idArea.classList.add('id-area');
+            
+            const bgColor = statusColors[userData.status] || statusColors['OTHER']; 
+            idArea.style.backgroundColor = bgColor;
+            if (userData.status === 'OFFLINE' || userData.status === 'ERROR') {
+                idArea.style.color = 'white';
+            } else {
+                idArea.style.color = 'black';
+            }
 
-             const idArea = document.createElement('div');
-             idArea.classList.add('id-area');
-             
-             const displayStatus = determineDisplayStatus(latestState);
-             const bgColor = statusColors[displayStatus] || statusColors['OTHER']; 
-             idArea.style.backgroundColor = bgColor;
-             if (displayStatus === 'OFFLINE' || displayStatus === 'ERROR') {
-                 idArea.style.color = 'white';
-             } else {
-                 idArea.style.color = 'black';
-             }
+            const img = document.createElement('img');
+            img.src = getUserIconUrl(userData.state.user);
+            img.alt = '';
+            img.onerror = () => { img.src = getUserIconUrl(null); }; 
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = userData.state.hrToken;
+            idArea.appendChild(img);
+            idArea.appendChild(nameSpan);
 
-             const img = document.createElement('img');
-             img.src = getUserIconUrl(latestState.user);
-             img.alt = '';
-             img.onerror = () => { img.src = getUserIconUrl(null); }; 
-             const nameSpan = document.createElement('span');
-             nameSpan.textContent = latestState.hrToken;
-             idArea.appendChild(img);
-             idArea.appendChild(nameSpan);
+            const graphArea = document.createElement('div');
+            graphArea.classList.add('graph-area');
+            graphArea.textContent = 'Graph Placeholder'; 
 
-             const graphArea = document.createElement('div');
-             graphArea.classList.add('graph-area');
-             graphArea.textContent = 'Graph Placeholder'; 
-
-             row.appendChild(idArea);
-             row.appendChild(graphArea);
-             timelineUsers.appendChild(row);
-         });
+            row.appendChild(idArea);
+            row.appendChild(graphArea);
+            timelineUsers.appendChild(row);
+        });
     }
 
     function updateUI() {
@@ -376,41 +420,51 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         announceStatusChange(previousState, updatedStateDTO);
 
-                        // --- UI Update Logic --- 
-                        const quickStatusItem = quickStatusBar.querySelector(`.user-status-item[data-user-id="${updatedStateDTO.vrcUid}"]`);
-                        if (quickStatusItem) {
-                             const displayStatus = determineDisplayStatus(updatedStateDTO);
-                             Object.values(statusClasses).forEach(cls => quickStatusItem.classList.remove(cls));
-                             quickStatusItem.classList.add(statusClasses[displayStatus] || statusClasses['OTHER']);
-                             const img = quickStatusItem.querySelector('img');
-                             if (img) img.src = getUserIconUrl(updatedStateDTO.user);
-                             const span = quickStatusItem.querySelector('span');
-                             if (span) span.textContent = updatedStateDTO.hrToken;
+                        // Check if status changed, which would require re-sorting
+                        const oldStatus = previousState ? determineDisplayStatus(previousState) : null;
+                        const newStatus = determineDisplayStatus(updatedStateDTO);
+                        const statusChanged = oldStatus !== newStatus;
+                        
+                        // If status changed, do a full redraw to maintain sort order
+                        if (statusChanged) {
+                            renderQuickStatusBar();
+                            renderTimeline();
+                        } else {
+                            // Just update the individual items
+                            const quickStatusItem = quickStatusBar.querySelector(`.user-status-item[data-user-id="${updatedStateDTO.vrcUid}"]`);
+                            if (quickStatusItem) {
+                                Object.values(statusClasses).forEach(cls => quickStatusItem.classList.remove(cls));
+                                quickStatusItem.classList.add(statusClasses[newStatus] || statusClasses['OTHER']);
+                                const img = quickStatusItem.querySelector('img');
+                                if (img) img.src = getUserIconUrl(updatedStateDTO.user);
+                                const span = quickStatusItem.querySelector('span');
+                                if (span) span.textContent = updatedStateDTO.hrToken;
+                            } else {
+                                log('warn', `Quick status item not found for ${updatedStateDTO.hrToken} - performing full redraw.`);
+                                renderQuickStatusBar();
+                            }
+                            
+                            const timelineIdArea = timelineUsers.querySelector(`.timeline-user-row[data-user-id="${updatedStateDTO.vrcUid}"] .id-area`);
+                            if(timelineIdArea){
+                                const bgColor = statusColors[newStatus] || statusColors['OTHER']; 
+                                timelineIdArea.style.backgroundColor = bgColor;
+                                const img = timelineIdArea.querySelector('img');
+                                if (img) img.src = getUserIconUrl(updatedStateDTO.user);
+                                const span = timelineIdArea.querySelector('span');
+                                if (span) span.textContent = updatedStateDTO.hrToken;
 
-                         } else {
-                              log('warn', `Quick status item not found for ${updatedStateDTO.hrToken} - performing full redraw.`);
-                              renderQuickStatusBar();
-                         }
-                        const timelineIdArea = timelineUsers.querySelector(`.timeline-user-row[data-user-id="${updatedStateDTO.vrcUid}"] .id-area`);
-                         if(timelineIdArea){
-                             const displayStatus = determineDisplayStatus(updatedStateDTO);
-                             const bgColor = statusColors[displayStatus] || statusColors['OTHER']; 
-                             timelineIdArea.style.backgroundColor = bgColor;
-                             const img = timelineIdArea.querySelector('img');
-                             if (img) img.src = getUserIconUrl(updatedStateDTO.user);
-                             const span = timelineIdArea.querySelector('span');
-                             if (span) span.textContent = updatedStateDTO.hrToken;
-
-                             if (displayStatus === 'OFFLINE' || displayStatus === 'ERROR') {
-                                 timelineIdArea.style.color = 'white';
-                             } else {
-                                 timelineIdArea.style.color = 'black';
-                             }
-                         } else {
-                              log('warn', `Timeline row not found for ${updatedStateDTO.hrToken} - full redraw will handle.`);
-                              renderTimeline();
-                         }
-                         renderStatusLine(); 
+                                if (newStatus === 'OFFLINE' || newStatus === 'ERROR') {
+                                    timelineIdArea.style.color = 'white';
+                                } else {
+                                    timelineIdArea.style.color = 'black';
+                                }
+                            } else {
+                                log('warn', `Timeline row not found for ${updatedStateDTO.hrToken} - performing full redraw.`);
+                                renderTimeline();
+                            }
+                        }
+                        
+                        renderStatusLine();
                         break;
                     case 'SYSTEM':
                         log('info', `Processing SYSTEM message: ${JSON.stringify(message.payload)}`);
