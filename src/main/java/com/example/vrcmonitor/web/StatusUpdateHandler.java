@@ -1,5 +1,6 @@
 package com.example.vrcmonitor.web;
 
+import com.example.vrcmonitor.VrcMonitorApplication;
 import com.example.vrcmonitor.config.AppConfig;
 import com.example.vrcmonitor.config.ConfigLoader;
 import com.example.vrcmonitor.config.UserConfig;
@@ -84,7 +85,17 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
                 })
                 .collect(Collectors.toList());
 
-        WsMessageDTO message = new WsMessageDTO(WsMessageDTO.MessageType.INITIAL_STATE, initialStatePayload);
+        // Include server start time in the message
+        Map<String, Object> metadata = Map.of(
+            "serverStartTime", VrcMonitorApplication.getServerStartTime().toEpochMilli()
+        );
+        
+        WsMessageDTO message = new WsMessageDTO(
+            WsMessageDTO.MessageType.INITIAL_STATE, 
+            initialStatePayload,
+            metadata
+        );
+        
         sendMessage(session, message);
     }
 

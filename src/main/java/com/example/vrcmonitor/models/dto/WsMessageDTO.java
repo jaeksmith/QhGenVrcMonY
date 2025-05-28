@@ -4,12 +4,21 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.Map;
+
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 public class WsMessageDTO {
     private MessageType type;
     private Object payload; // Can hold different DTOs based on type
+    private Map<String, Object> metadata; // For additional data like server start time
+    
+    public WsMessageDTO(MessageType type, Object payload) {
+        this.type = type;
+        this.payload = payload;
+        this.metadata = null;
+    }
 
     public enum MessageType {
         INITIAL_STATE, // For sending snapshot on connect

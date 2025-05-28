@@ -12,11 +12,18 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import java.time.Instant;
+
 @SpringBootApplication
 @EnableScheduling
 public class VrcMonitorApplication {
 
     private static final Logger log = LoggerFactory.getLogger(VrcMonitorApplication.class);
+    private static final Instant SERVER_START_TIME = Instant.now();
+    
+    public static Instant getServerStartTime() {
+        return SERVER_START_TIME;
+    }
 
     public static void main(String[] args) {
         // Disable headless mode to ensure Console is available if running in an environment without a display

@@ -3,7 +3,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let websocket;
     let userData = new Map(); // Store user data by vrcUid { latestState: DTO, previousState: DTO }
     let userOrder = []; // Maintain order from config
-    let connectionStatus = 'connecting'; // 'connecting', 'open', 'closed', 'error'
+    let connectionStatus = 'closed'; // 'open', 'closed', 'error'
     let backendApiStatus = 'unknown'; // 'ok', 'error', 'unknown'
     let lastUpdateTime = null;
     let statusMessage = 'Initializing...';
@@ -32,7 +32,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const MAX_LOGS_PER_CATEGORY = 100;
     
     // For uptime simulation
-    let startTime = new Date();
+    let serverStartTime = null;
+    let startTime = new Date(); // Client start time (fallback)
     let uptimeInterval;
 
     // --- DOM Elements ---
@@ -218,9 +219,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function createSortableUserArray() {
         const usersToRender = [];
         
+        log('debug', `Creating sortable array from ${userOrder.length} users in userOrder`);
+        
         userOrder.forEach((uid, index) => {
             const userStateData = userData.get(uid);
-            if (!userStateData || !userStateData.latestState) return; 
+            if (!userStateData || !userStateData.latestState) {
+                log('warn', `User data missing or invalid for uid: ${uid}`);
+                return;
+            }
             
             const latestState = userStateData.latestState;
             const displayStatus = determineDisplayStatus(latestState);
@@ -232,6 +238,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 status: displayStatus,
                 priority: index // Lower index = higher priority
             });
+            
+            log('debug', `Added user ${latestState.hrToken} (${uid}) with status ${displayStatus}`);
         });
         
         return usersToRender;
@@ -250,6 +258,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderQuickStatusBar() {
+        log('debug', `Starting renderQuickStatusBar. UserOrder length: ${userOrder.length}, userData size: ${userData.size}`);
+        
         // Save the toggle state before clearing
         const wasCollapsed = quickStatusSection.classList.contains('collapsed');
         
@@ -267,6 +277,8 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Create and sort the users array
         const usersToRender = createSortableUserArray();
+        log('debug', `Created sortable array with ${usersToRender.length} users`);
+        
         sortUsersByStatusAndPriority(usersToRender);
         
         // Render in sorted order
@@ -398,25 +410,54 @@ document.addEventListener('DOMContentLoaded', () => {
 
             try {
                 const message = JSON.parse(event.data);
+                log('debug', `Parsed message type: ${message.type}`);
+                
                 switch (message.type) {
                     case 'INITIAL_STATE':
-                        log('info', 'Processing INITIAL_STATE');
-                        userData.clear();
-                        userOrder = []; 
-                        message.payload.forEach(userStateDTO => {
-                            userData.set(userStateDTO.vrcUid, { latestState: userStateDTO, previousState: null });
-                            userOrder.push(userStateDTO.vrcUid); 
-                        });
-                        updateUI();
+                        // Store all users from initial state
+                        if (Array.isArray(message.payload)) {
+                            // Clear existing data to avoid stale entries
+                            userData.clear();
+                            userOrder = [];
+                            
+                            message.payload.forEach(userStatus => {
+                                // Store user data with proper structure
+                                userData.set(userStatus.vrcUid, { latestState: userStatus, previousState: null });
+                                
+                                // Store vrcUid in userOrder (not hrToken)
+                                if (userStatus.vrcUid && !userOrder.includes(userStatus.vrcUid)) {
+                                    userOrder.push(userStatus.vrcUid);
+                                }
+                            });
+                            
+                            // Get server start time from metadata
+                            if (message.metadata && message.metadata.serverStartTime) {
+                                serverStartTime = new Date(message.metadata.serverStartTime);
+                                log('info', `Server start time: ${serverStartTime.toISOString()}`);
+                            }
+                            
+                            // Add debug info
+                            log('info', `Received ${userData.size} users in initial state`);
+                            log('debug', `UserOrder: ${JSON.stringify(userOrder)}`);
+                            
+                            // Redraw all UI elements
+                            updateUI();
+                        }
                         break;
                     case 'USER_UPDATE':
                         const updatedStateDTO = message.payload;
-                        log('info', `Processing USER_UPDATE for ${updatedStateDTO.hrToken}`);
+                        log('info', `Processing USER_UPDATE for ${updatedStateDTO.hrToken} (${updatedStateDTO.vrcUid})`);
                         
                         const previousData = userData.get(updatedStateDTO.vrcUid);
                         const previousState = previousData ? previousData.latestState : null;
                         
                         userData.set(updatedStateDTO.vrcUid, { latestState: updatedStateDTO, previousState: previousState });
+                        
+                        // Make sure this user's vrcUid is in userOrder
+                        if (!userOrder.includes(updatedStateDTO.vrcUid)) {
+                            userOrder.push(updatedStateDTO.vrcUid);
+                            log('info', `Added new user ${updatedStateDTO.hrToken} to userOrder`);
+                        }
                         
                         announceStatusChange(previousState, updatedStateDTO);
 
@@ -427,6 +468,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         // If status changed, do a full redraw to maintain sort order
                         if (statusChanged) {
+                            log('debug', `Status changed from ${oldStatus} to ${newStatus}, performing full redraw`);
                             renderQuickStatusBar();
                             renderTimeline();
                         } else {
@@ -680,8 +722,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         const updateUptime = () => {
+            if (!serverStartTime) {
+                // If server start time isn't available yet, show "Unknown"
+                document.getElementById('uptime-days').textContent = '?';
+                document.getElementById('uptime-hours').textContent = '?';
+                document.getElementById('uptime-seconds').textContent = 'Unknown';
+                return;
+            }
+            
             const now = new Date();
-            const diff = now - startTime;
+            const diff = now - serverStartTime;
             
             const days = Math.floor(diff / (1000 * 60 * 60 * 24));
             const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
@@ -971,6 +1021,13 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // --- Initialize Everything ---
     function initialize() {
+        // Clear any stale data
+        userData.clear();
+        userOrder = [];
+        serverStartTime = null;
+        
+        log('info', 'Initializing VRC Monitor UI');
+        
         // Set up tab handling
         setupTabHandling();
         
