@@ -552,29 +552,28 @@ document.addEventListener('DOMContentLoaded', () => {
                             const logData = message.payload;
                             console.debug('Received LOG_ENTRY:', logData);
                             try {
-                                // Check for timestamp and convert from Instant (in milliseconds) if needed
-                                let timestamp;
+                                // Check for timestamp and convert
+                                let timestamp = new Date();
                                 if (logData.timestamp) {
-                                    // Handle either string timestamp or epoch milliseconds
-                                    if (typeof logData.timestamp === 'string') {
+                                    // Now we're expecting a millisecond timestamp as a number
+                                    if (typeof logData.timestamp === 'number') {
                                         timestamp = new Date(logData.timestamp);
-                                    } else if (typeof logData.timestamp === 'number') {
+                                        console.debug(`Using numeric timestamp: ${logData.timestamp} -> ${timestamp.toISOString()}`);
+                                    } else if (typeof logData.timestamp === 'string') {
+                                        // Handle string timestamp (fallback)
                                         timestamp = new Date(logData.timestamp);
-                                    } else if (typeof logData.timestamp === 'object') {
-                                        // Handle Java Instant format which might be serialized as object
-                                        timestamp = new Date(logData.timestamp.epochSecond * 1000 + 
-                                                            (logData.timestamp.nano / 1000000));
+                                        console.debug(`Using string timestamp: ${logData.timestamp} -> ${timestamp.toISOString()}`);
                                     }
                                 } else {
-                                    timestamp = new Date();
+                                    console.debug('No timestamp found in log entry, using current time');
                                 }
                                 
                                 if (logData.type === 'request') {
                                     addLogEntry('server-request', logData.content, timestamp);
-                                    log('debug', `Added server request log: ${logData.content.substring(0, 50)}...`);
+                                    log('debug', `Added server request log with timestamp ${timestamp.toISOString()}`);
                                 } else if (logData.type === 'response') {
                                     addLogEntry('server-response', logData.content, timestamp);
-                                    log('debug', `Added server response log: ${logData.content.substring(0, 50)}...`);
+                                    log('debug', `Added server response log with timestamp ${timestamp.toISOString()}`);
                                 } else {
                                     log('warn', `Unknown log entry type: ${logData.type}`);
                                 }
@@ -989,13 +988,13 @@ document.addEventListener('DOMContentLoaded', () => {
             toggle.classList.remove('collapsed');
             toggle.classList.add('expanded');
             
-            // Start uptime interval and populate log console when opening
+            // Start uptime interval when opening
             if (section === statusLineSection) {
                 startUptimeCounter();
                 
-                // Only populate log console if it's empty
-                if (logConsoleOutput && logConsoleOutput.children.length === 0) {
-                    populateSimulatedLogs();
+                // Update log console if it's the active tab
+                if (document.getElementById('log-console').classList.contains('active')) {
+                    updateLogConsole();
                 }
             }
         }
@@ -1020,76 +1019,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             });
         });
-    }
-    
-    // --- Log Console Functions ---
-    function populateSimulatedLogs() {
-        // Clear existing logs
-        logConsoleOutput.innerHTML = '';
-        
-        // Generate random number of log entries (20-50)
-        const logCount = Math.floor(Math.random() * 30) + 20;
-        
-        // Log types and their prefixes
-        const logTypes = [
-            { type: 'Client Request', prefix: '[CR]', style: 'color: #8af' },
-            { type: 'Client Response', prefix: '[CRes]', style: 'color: #8fa' },
-            { type: 'Server Request', prefix: '[SR]', style: 'color: #f9a' },
-            { type: 'Server Response', prefix: '[SRes]', style: 'color: #fd8' }
-        ];
-        
-        // Sample API endpoints
-        const endpoints = [
-            '/api/users', 
-            '/auth/user', 
-            '/users/usr_123456',
-            '/worlds/wrld_987654',
-            '/auth/twofactorauth/totp/verify',
-            '/users/friends',
-            '/instances/join'
-        ];
-        
-        // Generate log entries
-        for (let i = 0; i < logCount; i++) {
-            const logType = logTypes[Math.floor(Math.random() * logTypes.length)];
-            const endpoint = endpoints[Math.floor(Math.random() * endpoints.length)];
-            const timestamp = new Date(Date.now() - Math.random() * 3600000).toISOString().replace('T', ' ').substr(0, 19);
-            
-            // Create different log line formats
-            let logText = '';
-            const randomFactor = Math.random();
-            
-            if (randomFactor < 0.3) {
-                // Short log line
-                logText = `${timestamp} ${logType.prefix} ${endpoint} - ${Math.floor(Math.random() * 1000)}ms`;
-            } else if (randomFactor < 0.7) {
-                // Medium log line
-                logText = `${timestamp} ${logType.prefix} ${endpoint} - Status: ${Math.random() < 0.9 ? 200 : 404} - Response time: ${Math.floor(Math.random() * 1000)}ms`;
-            } else {
-                // Long log line with JSON
-                const jsonObj = { 
-                    status: Math.random() < 0.9 ? 'success' : 'error',
-                    time: Math.floor(Math.random() * 1000),
-                    data: {
-                        id: `usr_${Math.floor(Math.random() * 1000000)}`,
-                        displayName: `User${Math.floor(Math.random() * 100)}`,
-                        status: ['online', 'offline', 'busy'][Math.floor(Math.random() * 3)],
-                        location: Math.random() < 0.5 ? 'private' : `wrld_${Math.floor(Math.random() * 1000000)}`
-                    }
-                };
-                logText = `${timestamp} ${logType.prefix} ${endpoint} - ${JSON.stringify(jsonObj, null, 2)}`;
-            }
-            
-            // Create and append log entry
-            const logEntry = document.createElement('div');
-            logEntry.className = 'log-entry';
-            logEntry.textContent = logText;
-            logEntry.style = logType.style;
-            logConsoleOutput.appendChild(logEntry);
-        }
-        
-        // Scroll to bottom
-        logConsoleOutput.scrollTop = logConsoleOutput.scrollHeight;
     }
     
     // --- Admin Functions ---
