@@ -5,13 +5,16 @@ import com.example.vrcmonitor.config.AppConfig;
 import com.example.vrcmonitor.config.ConfigLoader;
 import com.example.vrcmonitor.config.UserConfig;
 import com.example.vrcmonitor.models.dto.LogEntryDTO;
+import com.example.vrcmonitor.models.dto.SessionStatusDTO;
 import com.example.vrcmonitor.models.dto.StatusUpdateDTO;
 import com.example.vrcmonitor.models.dto.WsMessageDTO;
+import com.example.vrcmonitor.services.AuthService;
 import com.example.vrcmonitor.services.UserStateService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -33,18 +36,71 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
     private final UserStateService userStateService;
     private final ConfigLoader configLoader; // To get HRTokens
     private final ObjectMapper objectMapper; // Use the configured one
+    private final AuthService authService; // For session status
 
-    public StatusUpdateHandler(UserStateService userStateService, ConfigLoader configLoader, ObjectMapper objectMapper) {
+    public StatusUpdateHandler(UserStateService userStateService, ConfigLoader configLoader, ObjectMapper objectMapper, @Lazy AuthService authService) {
         this.userStateService = userStateService;
         this.configLoader = configLoader;
         this.objectMapper = objectMapper;
+        this.authService = authService;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         sessions.add(session);
         log.info("WebSocket connection established: SessionId={}, RemoteAddress={}", session.getId(), session.getRemoteAddress());
+        
+        // First send session status
+        sendSessionStatus(session);
+        
+        // Always send initial state, even when not logged in
         sendInitialState(session);
+    }
+
+    private void sendSessionStatus(WebSocketSession session) {
+        SessionStatusDTO sessionStatus = new SessionStatusDTO(
+                authService.hasActiveSession(),
+                authService.getLastSessionTime(),
+                null, // Don't expose username
+                null
+        );
+        
+        WsMessageDTO message = new WsMessageDTO(
+                WsMessageDTO.MessageType.SESSION_STATUS,
+                sessionStatus
+        );
+        
+        sendMessage(session, message);
+    }
+
+    /**
+     * Broadcasts the current session status to all connected clients
+     */
+    public void broadcastSessionStatus() {
+        SessionStatusDTO sessionStatus = new SessionStatusDTO(
+                authService.hasActiveSession(),
+                authService.getLastSessionTime(),
+                null, // Don't expose username
+                null
+        );
+        
+        WsMessageDTO message = new WsMessageDTO(
+                WsMessageDTO.MessageType.SESSION_STATUS,
+                sessionStatus
+        );
+        
+        broadcastMessage(message);
+        
+        // If we just got a session, send initial state to all clients
+        if (authService.hasActiveSession()) {
+            for (WebSocketSession session : sessions) {
+                try {
+                    sendInitialState(session);
+                } catch (Exception e) {
+                    log.error("Error sending initial state after session update", e);
+                }
+            }
+        }
     }
 
     private void sendInitialState(WebSocketSession session) {
@@ -72,12 +128,13 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
                             userConfig.getAnnounceVolumeMult()
                         );
                     } else {
+                        // When not logged in or no data yet, show as disconnected
                         return new StatusUpdateDTO(
                             userConfig.getVrcUid(),
                             userConfig.getHrToken(),
                             null, 
-                            UserStateService.StatusType.ERROR, 
-                            "Initializing...", 
+                            authService.hasActiveSession() ? UserStateService.StatusType.ERROR : UserStateService.StatusType.OFFLINE, 
+                            authService.hasActiveSession() ? "Initializing..." : "Server not connected", 
                             Instant.now(),
                             userConfig.getAnnounceVolumeMult()
                         );
@@ -218,10 +275,19 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
      * @param logEntry The log entry to broadcast
      */
     public void broadcastLogEntry(LogEntryDTO logEntry) {
-        if (logEntry == null) return;
+        if (logEntry == null) {
+            log.debug("Ignoring null log entry");
+            return;
+        }
         
-        WsMessageDTO message = new WsMessageDTO(WsMessageDTO.MessageType.LOG_ENTRY, logEntry);
-        broadcastMessage(message);
+        log.debug("Broadcasting log entry: type={}, timestamp={}", logEntry.getType(), logEntry.getTimestamp());
+        
+        try {
+            WsMessageDTO message = new WsMessageDTO(WsMessageDTO.MessageType.LOG_ENTRY, logEntry);
+            broadcastMessage(message);
+        } catch (Exception e) {
+            log.error("Error broadcasting log entry: {}", e.getMessage(), e);
+        }
     }
 
     private void broadcastMessage(WsMessageDTO message) {

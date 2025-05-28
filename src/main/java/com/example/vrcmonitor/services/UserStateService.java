@@ -171,6 +171,8 @@ public class UserStateService {
     // Enum for status type (remains same)
     public enum StatusType {
         OK, 
-        ERROR
+        ERROR,
+        OFFLINE,    // When user is offline
+        DISCONNECTED // When server is not connected
     }
 } 

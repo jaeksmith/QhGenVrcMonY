@@ -2,10 +2,14 @@ package com.example.vrcmonitor.services;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
 
 import java.io.Console;
 import java.util.Arrays;
+import java.time.Instant;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 public class AuthService {
@@ -14,12 +18,18 @@ public class AuthService {
     private String username = null;
     // Password is not stored long-term anymore
     // private char[] password = null; 
+    
+    // Add session tracking
+    private AtomicBoolean hasActiveSession = new AtomicBoolean(false);
+    private Instant lastSessionTime = null;
 
     private final VRChatApiService vrchatApiService;
+    private final MonitoringService monitoringService;
 
-    // Inject VRChatApiService
-    public AuthService(VRChatApiService vrchatApiService) {
+    // Inject VRChatApiService and MonitoringService
+    public AuthService(VRChatApiService vrchatApiService, @Lazy MonitoringService monitoringService) {
         this.vrchatApiService = vrchatApiService;
+        this.monitoringService = monitoringService;
     }
 
     // Use real VRChat API interaction. Returns specific result code.
@@ -29,6 +39,84 @@ public class AuthService {
         VRChatApiService.LoginResult result = vrchatApiService.login(user, pass).block();
         // Password char array is cleared within vrchatApiService.login or its sub-methods now
         return result != null ? result : VRChatApiService.LoginResult.FAILURE_NETWORK; // Handle null block result
+    }
+
+    /**
+     * @return true if there is an active session
+     */
+    public boolean hasActiveSession() {
+        return hasActiveSession.get();
+    }
+    
+    /**
+     * @return the time of last active session
+     */
+    public Instant getLastSessionTime() {
+        return lastSessionTime;
+    }
+    
+    /**
+     * Perform a login using credentials from client UI
+     * @param username VRChat username
+     * @param password Password as string
+     * @return Mono with login result
+     */
+    public Mono<VRChatApiService.LoginResult> clientLogin(String username, String password) {
+        log.info("Attempting VRChat login for user: {}", username);
+        
+        // Convert string to char array for security
+        char[] passwordChars = password != null ? password.toCharArray() : new char[0];
+        
+        try {
+            this.username = username;
+            return vrchatApiService.login(username, passwordChars)
+                .doOnSuccess(result -> {
+                    if (result == VRChatApiService.LoginResult.SUCCESS) {
+                        hasActiveSession.set(true);
+                        lastSessionTime = Instant.now();
+                        monitoringService.startMonitoring();
+                        log.info("Authentication successful via client login.");
+                    }
+                });
+        } finally {
+            // Always clear password chars for security
+            VRChatApiService.clearPassword(passwordChars);
+        }
+    }
+    
+    /**
+     * Verify 2FA code from client UI
+     * @param code The 2FA code entered by user
+     * @return Mono with login result
+     */
+    public Mono<VRChatApiService.LoginResult> verify2FACode(String code) {
+        return vrchatApiService.verify2FACode(code)
+            .doOnSuccess(result -> {
+                if (result == VRChatApiService.LoginResult.SUCCESS) {
+                    hasActiveSession.set(true);
+                    lastSessionTime = Instant.now();
+                    monitoringService.startMonitoring();
+                    log.info("2FA verification successful via client.");
+                }
+            });
+    }
+    
+    /**
+     * Get the required 2FA type
+     * @return The 2FA type or null if not required
+     */
+    public String get2FAType() {
+        return vrchatApiService.getRequired2faType();
+    }
+    
+    /**
+     * Clears the active session
+     */
+    public void logout() {
+        vrchatApiService.logout();
+        this.username = null;
+        this.hasActiveSession.set(false);
+        log.info("User logged out. Session cleared.");
     }
 
     /**
@@ -63,6 +151,8 @@ public class AuthService {
                 case SUCCESS:
                     log.info("Authentication successful via AuthService.");
                     this.username = currentUsername; // Store username for reference
+                    this.hasActiveSession.set(true);
+                    this.lastSessionTime = Instant.now();
                     return true; // Overall success
                 case FAILURE_CREDENTIALS:
                     log.warn("Login failed (invalid username or password). Please try again.");

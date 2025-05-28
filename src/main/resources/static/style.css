@@ -641,4 +641,83 @@ body {
 
 #status-line .status-bar > * {
     margin-right: 15px;
+}
+
+/* Server disconnected overlay */
+.server-disconnected-overlay {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: rgba(0, 0, 0, 0.8);
+    padding: 20px;
+    border-radius: 8px;
+    color: white;
+    z-index: 900;
+    min-width: 300px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    border: 1px solid #666;
+    cursor: move;
+}
+
+.server-disconnected-overlay h3 {
+    margin-top: 0;
+    color: #ff6b6b;
+}
+
+.server-disconnected-overlay button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 10px;
+    font-weight: bold;
+}
+
+.server-disconnected-overlay button:hover {
+    background-color: #45a049;
+}
+
+/* Login dialog specific styles */
+#login-dialog .modal-content {
+    max-width: 400px;
+}
+
+.login-field {
+    margin: 10px 0;
+}
+
+.login-field label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.login-field input {
+    width: 100%;
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+    background-color: #f5f5f5;
+}
+
+.error-text {
+    color: #ff6b6b;
+    margin: 10px 0;
+    font-size: 14px;
+}
+
+#session-info {
+    background-color: #444;
+    padding: 10px;
+    border-radius: 4px;
+    margin-top: 10px;
+}
+
+#disconnected-time {
+    font-weight: bold;
+    color: #ff6b6b;
 } 

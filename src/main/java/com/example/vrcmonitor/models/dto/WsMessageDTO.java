@@ -26,6 +26,9 @@ public class WsMessageDTO {
         ERROR,         // For sending general backend errors
         CLIENT_REQUEST, // Placeholder for potential client->server messages
         SYSTEM,        // For system-level messages like shutdown notifications
-        LOG_ENTRY      // For sending API log entries to clients
+        LOG_ENTRY,     // For sending API log entries to clients
+        SESSION_STATUS, // For sending session status updates (logged in/out)
+        LOGIN_REQUIRED, // To inform client that 2FA is required
+        LOGIN_RESULT    // To inform client of login result
     }
 } 

@@ -57,6 +57,7 @@ public class VRChatApiService {
     private String authCookie = null; // Holds the current auth cookie (temporary or final)
     // Add field to store the 2FA cookie received after successful verification
     private String twoFactorAuthCookie = null;
+    @Getter
     private String required2faType = null;
 
     // Retry configuration
@@ -101,9 +102,15 @@ public class VRChatApiService {
                     log.debug("VRChat API Response: {}", sanitizedLog);
                     
                     // Broadcast to clients if handler is available
-                    if (statusUpdateHandler != null) {
-                        LogEntryDTO logEntry = new LogEntryDTO("response", sanitizedLog, Instant.now());
-                        statusUpdateHandler.broadcastLogEntry(logEntry);
+                    try {
+                        if (statusUpdateHandler != null) {
+                            LogEntryDTO logEntry = new LogEntryDTO("response", sanitizedLog, Instant.now());
+                            statusUpdateHandler.broadcastLogEntry(logEntry);
+                        } else {
+                            log.debug("statusUpdateHandler is null, cannot broadcast response log");
+                        }
+                    } catch (Exception e) {
+                        log.error("Error broadcasting response log: {}", e.getMessage(), e);
                     }
                     
                     // Return the original body text
@@ -167,9 +174,15 @@ public class VRChatApiService {
         log.debug("VRChat API Request: {}", sanitizedLog);
         
         // Broadcast to clients if handler is available
-        if (statusUpdateHandler != null) {
-            LogEntryDTO logEntry = new LogEntryDTO("request", sanitizedLog, Instant.now());
-            statusUpdateHandler.broadcastLogEntry(logEntry);
+        try {
+            if (statusUpdateHandler != null) {
+                LogEntryDTO logEntry = new LogEntryDTO("request", sanitizedLog, Instant.now());
+                statusUpdateHandler.broadcastLogEntry(logEntry);
+            } else {
+                log.debug("statusUpdateHandler is null, cannot broadcast request log");
+            }
+        } catch (Exception e) {
+            log.error("Error broadcasting request log: {}", e.getMessage(), e);
         }
     }
     
@@ -294,7 +307,7 @@ public class VRChatApiService {
                                 List<String> twoFactorTypes = currentUser.getRequiresTwoFactorAuth();
                                 log.info("Login requires 2FA. Supported types: {}", twoFactorTypes);
                                 this.required2faType = twoFactorTypes.contains("totp") ? "totp" : twoFactorTypes.get(0);
-                                log.info("Selected 2FA type: {}. Proceeding directly to prompt.", this.required2faType);
+                                log.info("Selected 2FA type: {}. Returning REQUIRES_2FA result.", this.required2faType);
 
                                 // Initial auth cookie must exist to proceed
                                 if (this.authCookie == null) { 
@@ -302,8 +315,8 @@ public class VRChatApiService {
                                      return Mono.just(LoginResult.FAILURE_MISSING_AUTH_COOKIE); 
                                 }
 
-                                // Proceed directly to Step 2 (Prompt User & Verify)
-                                return promptAndSubmitVerificationCode(this.required2faType);
+                                // Return that 2FA is required - client will handle collecting the code
+                                return Mono.just(LoginResult.REQUIRES_2FA);
                             } else {
                                 // Login successful, 2FA not required - initial authCookie is the final one
                                 log.info("VRChat login successful (No 2FA). Using 'auth' cookie from initial response.");
@@ -328,41 +341,42 @@ public class VRChatApiService {
                 });
     }
 
-    // Step 2: Prompt user and submit the verification code using the initial auth cookie
-    private Mono<LoginResult> promptAndSubmitVerificationCode(String twoFactorType) {
-        Console console = System.console();
-        if (console == null) {
-            log.error("FATAL: No console available for 2FA code input.");
-            return Mono.just(LoginResult.FAILURE_CONSOLE_UNAVAILABLE);
+    /**
+     * Verifies a 2FA code provided by the client
+     * @param code The 2FA code to verify
+     * @return Result of the verification
+     */
+    public Mono<LoginResult> verify2FACode(String code) {
+        if (code == null || code.isBlank()) {
+            log.warn("No 2FA code provided.");
+            return Mono.just(LoginResult.FAILURE_2FA_INVALID_CODE);
         }
+        
         if (this.authCookie == null) {
-             log.error("INTERNAL ERROR: Cannot verify 2FA code, initial 'auth' cookie is missing.");
-             return Mono.just(LoginResult.FAILURE_MISSING_AUTH_COOKIE);
+            log.error("INTERNAL ERROR: Cannot verify 2FA code, initial 'auth' cookie is missing.");
+            return Mono.just(LoginResult.FAILURE_MISSING_AUTH_COOKIE);
         }
+        
+        if (this.required2faType == null) {
+            log.error("INTERNAL ERROR: Cannot verify 2FA code, no 2FA type is set.");
+            return Mono.just(LoginResult.FAILURE_UNSUPPORTED_2FA);
+        }
+        
         final String initialAuthCookieValue = this.authCookie;
         this.authCookie = null; // Clear potentially temporary auth cookie
 
-        String codeTypeName = "email".equalsIgnoreCase(twoFactorType) || "emailOtp".equalsIgnoreCase(twoFactorType) ? "Email OTP" : "Authenticator App";
-        System.out.println("--- VRChat Two-Factor Authentication Required ---");
-        String codeStr = console.readLine("Enter Code (%s): ", codeTypeName);
-
-        if (codeStr == null || codeStr.isBlank()) {
-            log.warn("No 2FA code entered.");
-            return Mono.just(LoginResult.FAILURE_2FA_INVALID_CODE);
-        }
-
         String verificationUri;
-        if ("emailOtp".equalsIgnoreCase(twoFactorType)) {
+        if ("emailOtp".equalsIgnoreCase(this.required2faType)) {
             verificationUri = "/auth/twofactorauth/emailotp/verify";
-        } else if ("totp".equalsIgnoreCase(twoFactorType)) {
+        } else if ("totp".equalsIgnoreCase(this.required2faType)) {
             verificationUri = "/auth/twofactorauth/totp/verify";
         } else {
-            log.error("Unsupported 2FA type for verification: {}", twoFactorType);
+            log.error("Unsupported 2FA type for verification: {}", this.required2faType);
             return Mono.just(LoginResult.FAILURE_UNSUPPORTED_2FA);
         }
 
         log.info("Submitting 2FA code to {}...", verificationUri);
-        Map<String, Object> requestBody = Map.of("code", codeStr);
+        Map<String, Object> requestBody = Map.of("code", code);
         log.debug("Sending POST {} Request Body: {}", verificationUri, requestBody);
 
         return webClient.post()
@@ -536,6 +550,15 @@ public class VRChatApiService {
         FAILURE_MISSING_AUTH_COOKIE, // Specifically for the *initial* auth cookie needed for 2FA verify
         FAILURE_CONSOLE_UNAVAILABLE,
         FAILURE_UNSUPPORTED_2FA,
-        FAILURE_NETWORK
+        FAILURE_NETWORK,
+        REQUIRES_2FA         // New status to indicate client needs to provide 2FA code
+    }
+
+    /**
+     * Check if there's an active session (auth cookie exists)
+     * @return true if an active session exists
+     */
+    public boolean hasActiveSession() {
+        return authCookie != null;
     }
 } 

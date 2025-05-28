@@ -98,6 +98,44 @@
         </div>
     </div>
 
+    <!-- Login Dialog -->
+    <div id="login-dialog" class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>VRChat Login Required</h3>
+            </div>
+            <div class="modal-body">
+                <div id="login-form">
+                    <div class="login-field">
+                        <label for="username">Username:</label>
+                        <input type="text" id="username" placeholder="VRChat Username" />
+                    </div>
+                    <div class="login-field">
+                        <label for="password">Password:</label>
+                        <input type="password" id="password" placeholder="VRChat Password" />
+                    </div>
+                    <div id="error-message" class="error-text"></div>
+                </div>
+                <div id="twofa-form" style="display: none;">
+                    <p>Two-Factor Authentication Required</p>
+                    <div class="login-field">
+                        <label for="twofa-code">2FA Code:</label>
+                        <input type="text" id="twofa-code" placeholder="Enter 2FA Code" />
+                    </div>
+                    <div id="twofa-error-message" class="error-text"></div>
+                </div>
+                <div id="session-info" style="display: none;">
+                    <p>Server is not logged in</p>
+                    <p id="disconnected-time">Disconnected for: 00:00:00</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="login-cancel" class="dialog-btn">Cancel</button>
+                <button id="login-submit" class="dialog-btn confirm-btn">Login</button>
+            </div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html> 

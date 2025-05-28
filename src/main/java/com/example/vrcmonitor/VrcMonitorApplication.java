@@ -36,28 +36,24 @@ public class VrcMonitorApplication {
         return args -> {
             log.info("VRChat Monitor Starting...");
 
-            // Perform initial authentication before starting web server etc.
-            boolean authenticated = authService.performConsoleLogin();
-
-            if (!authenticated) {
-                log.error("Authentication failed after multiple attempts. Exiting.");
-                // Shutdown the application context gracefully
+            // Load configuration without requiring login
+            log.info("Loading monitoring configuration...");
+            try {
+                log.info("Monitoring Configuration:");
+                configLoader.getConfig().getUsers().forEach(user -> log.info("- {}", user));
+            } catch (Exception e) {
+                log.error("Failed to load configuration: {}", e.getMessage(), e);
                 ctx.close();
-                System.exit(1); // Exit
-            } else {
-                 log.info("Authentication successful.");
-                 log.info("Proceeding with application startup...");
-                 // At this point, Spring Boot continues starting other components (web server, etc.)
-
-                 log.info("Monitoring Configuration:");
-                 configLoader.getConfig().getUsers().forEach(user -> log.info("- {}", user));
-
-                 // Start the monitoring service now that authentication is successful
-                 monitoringService.startMonitoring();
-
-                 log.info("Web UI will be available shortly on http://localhost:8080 (further implementation needed).");
-                 // Placeholder for where monitoring would start
+                System.exit(1);
             }
+
+            // No longer perform console login - wait for client login
+            log.info("Starting in disconnected mode. Waiting for client login...");
+            
+            // The monitoring service will check for active session before polling
+            monitoringService.startMonitoring();
+
+            log.info("Web UI will be available shortly on http://localhost:8080");
         };
     }
 } 

@@ -8,6 +8,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastUpdateTime = null;
     let statusMessage = 'Initializing...';
     let timeScale = 1; // Default seconds per pixel
+    
+    // Session status variables
+    let hasActiveSession = false;
+    let lastSessionTime = null;
+    let disconnectedOverlay = null;
+    let disconnectedTimer = null;
+    let loginDialogVisible = false;
+    let twoFactorRequired = false;
 
     // Tab handling variables
     const tabButtons = document.querySelectorAll('.tab-button');
@@ -444,6 +452,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             updateUI();
                         }
                         break;
+                    case 'SESSION_STATUS':
+                        log('info', `Processing SESSION_STATUS message: ${JSON.stringify(message.payload)}`);
+                        handleSessionStatus(message.payload);
+                        break;
                     case 'USER_UPDATE':
                         const updatedStateDTO = message.payload;
                         log('info', `Processing USER_UPDATE for ${updatedStateDTO.hrToken} (${updatedStateDTO.vrcUid})`);
@@ -538,11 +550,40 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Handle server-side logs
                         if (message.payload) {
                             const logData = message.payload;
-                            if (logData.type === 'request') {
-                                addLogEntry('server-request', logData.content, new Date(logData.timestamp));
-                            } else if (logData.type === 'response') {
-                                addLogEntry('server-response', logData.content, new Date(logData.timestamp));
+                            console.debug('Received LOG_ENTRY:', logData);
+                            try {
+                                // Check for timestamp and convert from Instant (in milliseconds) if needed
+                                let timestamp;
+                                if (logData.timestamp) {
+                                    // Handle either string timestamp or epoch milliseconds
+                                    if (typeof logData.timestamp === 'string') {
+                                        timestamp = new Date(logData.timestamp);
+                                    } else if (typeof logData.timestamp === 'number') {
+                                        timestamp = new Date(logData.timestamp);
+                                    } else if (typeof logData.timestamp === 'object') {
+                                        // Handle Java Instant format which might be serialized as object
+                                        timestamp = new Date(logData.timestamp.epochSecond * 1000 + 
+                                                            (logData.timestamp.nano / 1000000));
+                                    }
+                                } else {
+                                    timestamp = new Date();
+                                }
+                                
+                                if (logData.type === 'request') {
+                                    addLogEntry('server-request', logData.content, timestamp);
+                                    log('debug', `Added server request log: ${logData.content.substring(0, 50)}...`);
+                                } else if (logData.type === 'response') {
+                                    addLogEntry('server-response', logData.content, timestamp);
+                                    log('debug', `Added server response log: ${logData.content.substring(0, 50)}...`);
+                                } else {
+                                    log('warn', `Unknown log entry type: ${logData.type}`);
+                                }
+                            } catch (logError) {
+                                log('error', `Error processing log entry: ${logError.message}`);
+                                console.error('Log entry processing error:', logError, 'Original data:', logData);
                             }
+                        } else {
+                            log('warn', 'Received LOG_ENTRY message with no payload');
                         }
                         break;
                     case 'ERROR':
@@ -551,13 +592,349 @@ document.addEventListener('DOMContentLoaded', () => {
                          renderStatusLine();
                          break;
                     default:
-                        log('warn', `Received unknown WebSocket message type: ${message.type}`);
+                        // Check for valid enum values from server that we might not be handling yet
+                        const validTypes = [
+                            'INITIAL_STATE', 'USER_UPDATE', 'ERROR', 'CLIENT_REQUEST', 
+                            'SYSTEM', 'LOG_ENTRY', 'SESSION_STATUS', 'LOGIN_REQUIRED', 'LOGIN_RESULT'
+                        ];
+                        
+                        if (validTypes.includes(message.type)) {
+                            log('warn', `Received valid but unhandled message type: ${message.type}`);
+                            console.warn('Unhandled message:', message);
+                        } else {
+                            log('error', `Received unknown WebSocket message type: ${message.type}`);
+                            console.error('Unknown message:', message);
+                        }
                 }
             } catch (error) {
                 log('error', `Failed to parse WebSocket message or update UI: ${error}`);
                 console.error(error);
             }
         };
+    }
+
+    // Handle session status updates from server
+    function handleSessionStatus(sessionStatus) {
+        const wasLoggedIn = hasActiveSession;
+        hasActiveSession = sessionStatus.hasActiveSession;
+        lastSessionTime = sessionStatus.lastSessionTimeMs ? new Date(sessionStatus.lastSessionTimeMs) : null;
+        
+        log('info', `Session status update: hasActiveSession=${hasActiveSession}, lastSessionTime=${lastSessionTime}`);
+        
+        // Update UI based on session status
+        if (hasActiveSession) {
+            // If we were previously disconnected, hide the overlay
+            if (!wasLoggedIn) {
+                log('info', 'Session became active, hiding disconnected overlay');
+                hideDisconnectedOverlay();
+                hideLoginDialog();
+                // Update status message
+                statusMessage = 'Connected with active session';
+                // Trigger a refresh to get latest user states
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    log('info', 'Sending REFRESH request after login...');
+                    websocket.send('REFRESH');
+                }
+            }
+        } else {
+            // No active session, show disconnected overlay if not already visible
+            statusMessage = 'No active session';
+            if (!disconnectedOverlay && !loginDialogVisible) {
+                log('info', 'Session not active, showing disconnected overlay');
+                showDisconnectedOverlay();
+            }
+        }
+        
+        renderStatusLine();
+    }
+    
+    // Show overlay indicating server has no active session
+    function showDisconnectedOverlay() {
+        // Remove any existing overlay first
+        hideDisconnectedOverlay();
+        
+        // Create the overlay
+        disconnectedOverlay = document.createElement('div');
+        disconnectedOverlay.className = 'server-disconnected-overlay';
+        disconnectedOverlay.innerHTML = `
+            <h3>VRChat Session Required</h3>
+            <p>The server is not connected to VRChat.</p>
+            <p id="overlay-disconnected-time">Disconnected for: 00:00:00</p>
+            <button id="overlay-login-button">Login</button>
+        `;
+        
+        document.body.appendChild(disconnectedOverlay);
+        
+        // Make the overlay draggable
+        makeDraggable(disconnectedOverlay);
+        
+        // Add login button handler
+        const loginButton = document.getElementById('overlay-login-button');
+        loginButton.addEventListener('click', showLoginDialog);
+        
+        // Start timer to update the disconnected time
+        startDisconnectedTimer();
+    }
+    
+    // Make an element draggable
+    function makeDraggable(element) {
+        let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+        
+        element.onmousedown = dragMouseDown;
+        
+        function dragMouseDown(e) {
+            e = e || window.event;
+            e.preventDefault();
+            // Get the mouse cursor position at startup
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            document.onmouseup = closeDragElement;
+            // Call a function whenever the cursor moves
+            document.onmousemove = elementDrag;
+        }
+        
+        function elementDrag(e) {
+            e = e || window.event;
+            e.preventDefault();
+            // Calculate the new cursor position
+            pos1 = pos3 - e.clientX;
+            pos2 = pos4 - e.clientY;
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            // Set the element's new position
+            element.style.top = (element.offsetTop - pos2) + "px";
+            element.style.left = (element.offsetLeft - pos1) + "px";
+        }
+        
+        function closeDragElement() {
+            // Stop moving when mouse button is released
+            document.onmouseup = null;
+            document.onmousemove = null;
+        }
+    }
+    
+    // Hide the disconnected overlay
+    function hideDisconnectedOverlay() {
+        if (disconnectedOverlay) {
+            document.body.removeChild(disconnectedOverlay);
+            disconnectedOverlay = null;
+        }
+        
+        // Clear the timer
+        if (disconnectedTimer) {
+            clearInterval(disconnectedTimer);
+            disconnectedTimer = null;
+        }
+    }
+    
+    // Start timer to update disconnected time
+    function startDisconnectedTimer() {
+        // Clear any existing timer
+        if (disconnectedTimer) {
+            clearInterval(disconnectedTimer);
+        }
+        
+        const updateDisconnectedTime = () => {
+            // Update in disconnected overlay
+            const overlayTimeElement = document.getElementById('overlay-disconnected-time');
+            
+            // Update in login dialog
+            const sessionInfoTime = document.getElementById('disconnected-time');
+            
+            if (!overlayTimeElement && !sessionInfoTime) {
+                // If neither element exists, stop the timer
+                if (disconnectedTimer) {
+                    clearInterval(disconnectedTimer);
+                    disconnectedTimer = null;
+                }
+                return;
+            }
+            
+            let timeSince;
+            if (lastSessionTime) {
+                // Calculate time since last session
+                timeSince = new Date() - new Date(lastSessionTime);
+            } else {
+                // If no last session time, use server start time or client start time
+                timeSince = new Date() - (serverStartTime || startTime);
+            }
+            
+            // Format as dd:hh:mm:ss
+            const days = Math.floor(timeSince / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((timeSince % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const minutes = Math.floor((timeSince % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((timeSince % (1000 * 60)) / 1000);
+            
+            const timeString = `${String(days).padStart(2, '0')}:${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            
+            // Update overlay if it exists
+            if (overlayTimeElement) {
+                overlayTimeElement.textContent = `Disconnected for: ${timeString}`;
+            }
+            
+            // Update login dialog if it exists
+            if (sessionInfoTime) {
+                sessionInfoTime.textContent = `Disconnected for: ${timeString}`;
+            }
+        };
+        
+        // Update immediately and then every second
+        updateDisconnectedTime();
+        disconnectedTimer = setInterval(updateDisconnectedTime, 1000);
+    }
+    
+    // Show the login dialog
+    function showLoginDialog() {
+        // Hide the disconnected overlay if visible
+        hideDisconnectedOverlay();
+        
+        // Show the login form, hide 2FA form
+        document.getElementById('login-form').style.display = 'block';
+        document.getElementById('twofa-form').style.display = 'none';
+        document.getElementById('session-info').style.display = 'block';
+        
+        // Clear any previous error messages
+        document.getElementById('error-message').textContent = '';
+        document.getElementById('twofa-error-message').textContent = '';
+        
+        // Reset form fields
+        document.getElementById('username').value = '';
+        document.getElementById('password').value = '';
+        document.getElementById('twofa-code').value = '';
+        
+        // Show the dialog
+        const loginDialog = document.getElementById('login-dialog');
+        loginDialog.style.display = 'flex';
+        loginDialogVisible = true;
+        
+        // Start the disconnected timer for the login dialog
+        startDisconnectedTimer();
+        
+        // Focus on the username field
+        setTimeout(() => {
+            document.getElementById('username').focus();
+        }, 100);
+    }
+    
+    // Hide the login dialog
+    function hideLoginDialog() {
+        const loginDialog = document.getElementById('login-dialog');
+        loginDialog.style.display = 'none';
+        loginDialogVisible = false;
+        twoFactorRequired = false;
+    }
+    
+    // Submit login credentials
+    function submitLogin() {
+        if (twoFactorRequired) {
+            // Submit 2FA code
+            const code = document.getElementById('twofa-code').value.trim();
+            if (!code) {
+                document.getElementById('twofa-error-message').textContent = 'Please enter your 2FA code';
+                return;
+            }
+            
+            log('info', 'Submitting 2FA code...');
+            
+            // Create the login request
+            const loginRequest = {
+                type: '2fa',
+                twoFactorCode: code
+            };
+            
+            // Log client request
+            addLogEntry('client-request', `Sending 2FA verification: ${JSON.stringify({...loginRequest, twoFactorCode: '***'})}`);
+            
+            // Send the request
+            fetch('/api/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(loginRequest)
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Log response
+                log('info', `2FA result: ${JSON.stringify(data)}`);
+                addLogEntry('client-response', `2FA Result: ${JSON.stringify(data)}`);
+                
+                if (data.success) {
+                    // Success! Hide dialog
+                    log('info', '2FA verification successful');
+                    hideLoginDialog();
+                } else {
+                    // Failed, show error
+                    log('warn', `2FA verification failed: ${data.message}`);
+                    document.getElementById('twofa-error-message').textContent = data.message || 'Invalid 2FA code';
+                }
+            })
+            .catch(error => {
+                console.error('Error submitting 2FA:', error);
+                log('error', `2FA error: ${error.message}`);
+                addLogEntry('client-response', `2FA Error: ${error.message}`);
+                document.getElementById('twofa-error-message').textContent = 'Network error. Please try again.';
+            });
+        } else {
+            // Submit username/password
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            
+            if (!username || !password) {
+                document.getElementById('error-message').textContent = 'Please enter both username and password';
+                return;
+            }
+            
+            log('info', `Submitting login for user: ${username}`);
+            
+            // Create the login request
+            const loginRequest = {
+                type: 'credentials',
+                username: username,
+                password: password
+            };
+            
+            // Log client request (don't log password)
+            addLogEntry('client-request', `Sending login request: ${JSON.stringify({...loginRequest, password: '***'})}`);
+            
+            // Send the request
+            fetch('/api/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(loginRequest)
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Log response
+                log('info', `Login result: ${JSON.stringify(data)}`);
+                addLogEntry('client-response', `Login Result: ${JSON.stringify(data)}`);
+                
+                if (data.success) {
+                    // Success! Hide dialog
+                    log('info', 'Login successful');
+                    hideLoginDialog();
+                } else if (data.requires2FA) {
+                    // 2FA required, show 2FA form
+                    log('info', `2FA required, type: ${data.twoFactorType}`);
+                    document.getElementById('login-form').style.display = 'none';
+                    document.getElementById('twofa-form').style.display = 'block';
+                    document.getElementById('twofa-code').focus();
+                    twoFactorRequired = true;
+                } else {
+                    // Failed, show error
+                    log('warn', `Login failed: ${data.message}`);
+                    document.getElementById('error-message').textContent = data.message || 'Invalid credentials';
+                }
+            })
+            .catch(error => {
+                console.error('Error submitting login:', error);
+                log('error', `Login error: ${error.message}`);
+                addLogEntry('client-response', `Login Error: ${error.message}`);
+                document.getElementById('error-message').textContent = 'Network error. Please try again.';
+            });
+        }
     }
 
     // --- Event Listeners ---
@@ -1028,19 +1405,20 @@ document.addEventListener('DOMContentLoaded', () => {
         
         log('info', 'Initializing VRC Monitor UI');
         
-        // Set up tab handling
-        setupTabHandling();
+        // Connect WebSocket
+        connectWebSocket();
         
-        // Set up log filters
+        // Setup UI interactions
+        setupTabHandling();
+        initializeSectionStates();
+        setupShutdownDialog();
+        setupLoginDialog();
         setupLogFilters();
         
         // Set up admin button click handlers
         document.getElementById('shutdown-server-btn').addEventListener('click', () => {
             showShutdownConfirmation();
         });
-        
-        // Setup shutdown confirmation dialog
-        setupShutdownDialog();
         
         document.getElementById('test-announce-btn').addEventListener('click', () => {
             // Test the speech announcement functionality at different volumes
@@ -1069,11 +1447,12 @@ document.addEventListener('DOMContentLoaded', () => {
             })();
         });
         
-        // Initialize section states
-        initializeSectionStates();
+        // Initial UI render
+        renderStatusLine();
+        renderTimeline(); // Basic structure only at this point
         
-        // Connect to WebSocket
-        connectWebSocket();
+        // Start update timer - refreshes UI every 5 seconds to keep timestamps current
+        setInterval(updateUI, 5000);
     }
     
     // --- Log Console Functions ---
@@ -1093,6 +1472,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    // Start initialization
+    function setupLoginDialog() {
+        const loginDialog = document.getElementById('login-dialog');
+        const submitButton = document.getElementById('login-submit');
+        const cancelButton = document.getElementById('login-cancel');
+        
+        // Submit button click
+        submitButton.addEventListener('click', submitLogin);
+        
+        // Cancel button click
+        cancelButton.addEventListener('click', () => {
+            hideLoginDialog();
+            // Show the disconnected overlay again
+            if (!hasActiveSession) {
+                showDisconnectedOverlay();
+            }
+        });
+        
+        // Handle enter key in input fields
+        document.getElementById('username').addEventListener('keyup', (event) => {
+            if (event.key === 'Enter') {
+                document.getElementById('password').focus();
+            }
+        });
+        
+        document.getElementById('password').addEventListener('keyup', (event) => {
+            if (event.key === 'Enter') {
+                submitLogin();
+            }
+        });
+        
+        document.getElementById('twofa-code').addEventListener('keyup', (event) => {
+            if (event.key === 'Enter') {
+                submitLogin();
+            }
+        });
+    }
+
+    // Call initialize when document is loaded
     initialize();
 }); 
