@@ -11,6 +11,11 @@ import java.time.Duration;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Configuration for each user to be monitored.
+ * Each user should have a reasonable poll rate to avoid
+ * overwhelming the VRChat API with too many requests.
+ */
 @Data // Lombok annotation for getters, setters, toString, etc.
 @NoArgsConstructor // Needed for Jackson deserialization
 public class UserConfig {
@@ -19,7 +24,15 @@ public class UserConfig {
 
     private String hrToken;
     private String vrcUid;
+    
+    /**
+     * The poll rate defines how frequently we check this user's status.
+     * IMPORTANT: To avoid VRChat API rate limits, this should be set to
+     * a reasonable value (10+ minutes recommended). Format examples:
+     * "15m", "1h30m", "10m30s", etc.
+     */
     private String pollRate; // Store the raw string
+    
     private Double announceVolumeMult; // Add optional volume multiplier (nullable Double)
 
     @JsonIgnore // Don't serialize/deserialize this derived field directly
@@ -30,6 +43,11 @@ public class UserConfig {
     // Simple parser for "XmYs" format
     private static final Pattern DURATION_PATTERN = Pattern.compile("(?:(\\d+)d)?(?:(\\d+)h)?(?:(\\d+)m)?(?:(\\d+)s)?", Pattern.CASE_INSENSITIVE);
 
+    /**
+     * Parse the poll rate string into a Duration object.
+     * If the poll rate is invalid or too short, we default to 1 minute
+     * to ensure a minimum delay between API calls.
+     */
     private Duration parsePollRate(String rate) {
         if (rate == null || rate.isBlank()) {
             log.warn("Poll rate is null or blank for user {}. Defaulting to 1 minute.", hrToken != null ? hrToken : vrcUid);
