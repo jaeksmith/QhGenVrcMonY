@@ -1325,6 +1325,66 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
+    // Function to send a drop session request to the server
+    function sendDropSessionRequest() {
+        log('info', 'Sending DROP SESSION request to server...');
+        statusMessage = 'Dropping VRChat session...';
+        renderStatusLine();
+        
+        // Log client request
+        addLogEntry('client-request', 'Sending request: POST /api/auth/logout');
+        
+        // Send the request to the server endpoint
+        fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (response.ok) {
+                log('info', 'Session dropped successfully');
+                addLogEntry('client-response', 'Session dropped successfully');
+            } else {
+                throw new Error(`Error: ${response.status} ${response.statusText}`);
+            }
+        })
+        .catch(error => {
+            log('error', `Failed to drop session: ${error.message}`);
+            addLogEntry('client-response', `Failed to drop session: ${error.message}`);
+            statusMessage = 'Failed to drop session';
+            renderStatusLine();
+        });
+    }
+    
+    // Function to test speech announcements
+    function sendTestAnnounceRequest() {
+        // Test the speech announcement functionality at different volumes
+        if (typeof synth === 'undefined') {
+            alert('Speech synthesis is not supported in your browser!');
+            return;
+        }
+        
+        // Function to speak a test phrase at a given volume
+        const speakTestPhrase = (status, volume) => {
+            const utterance = new SpeechSynthesisUtterance(`Test user is now ${status}.`);
+            utterance.volume = volume;
+            log('info', `Test announcement: "${utterance.text}" at volume ${volume}`);
+            synth.speak(utterance);
+            
+            // Add a slight delay between announcements
+            return new Promise(resolve => setTimeout(resolve, 100));
+        };
+        
+        // Queue the test announcements in sequence with different volumes
+        // We use async/await to create small gaps between announcements
+        (async () => {
+            await speakTestPhrase('online', 1.0);
+            await speakTestPhrase('offline', 0.66);
+            await speakTestPhrase('on website', 0.33);
+        })();
+    }
+    
     // --- Initialize Everything ---
     function initialize() {
         // Clear any stale data
@@ -1350,30 +1410,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         
         document.getElementById('test-announce-btn').addEventListener('click', () => {
-            // Test the speech announcement functionality at different volumes
-            if (typeof synth === 'undefined') {
-                alert('Speech synthesis is not supported in your browser!');
-                return;
-            }
-            
-            // Function to speak a test phrase at a given volume
-            const speakTestPhrase = (status, volume) => {
-                const utterance = new SpeechSynthesisUtterance(`Test user is now ${status}.`);
-                utterance.volume = volume;
-                log('info', `Test announcement: "${utterance.text}" at volume ${volume}`);
-                synth.speak(utterance);
-                
-                // Add a slight delay between announcements
-                return new Promise(resolve => setTimeout(resolve, 100));
-            };
-            
-            // Queue the test announcements in sequence with different volumes
-            // We use async/await to create small gaps between announcements
-            (async () => {
-                await speakTestPhrase('online', 1.0);
-                await speakTestPhrase('offline', 0.66);
-                await speakTestPhrase('on website', 0.33);
-            })();
+            sendTestAnnounceRequest();
+        });
+        
+        document.getElementById('drop-session-btn').addEventListener('click', () => {
+            sendDropSessionRequest();
         });
         
         // Initial UI render

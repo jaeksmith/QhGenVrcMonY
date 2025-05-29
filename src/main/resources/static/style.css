@@ -232,6 +232,14 @@
     background-color: #c33;
 }
 
+#drop-session-btn {
+    background-color: #a84;
+}
+
+#drop-session-btn:hover {
+    background-color: #c95;
+}
+
 /* Custom Confirmation Dialog */
 .modal-dialog {
     display: none;
