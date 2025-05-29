@@ -37,6 +37,10 @@ import java.io.IOException;
 import java.net.SocketException;
 import io.netty.channel.ConnectTimeoutException;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
+import com.example.vrcmonitor.services.ApiRateLimiter;
+import reactor.core.scheduler.Schedulers;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 @Service
 public class VRChatApiService {
@@ -48,6 +52,7 @@ public class VRChatApiService {
 
     private final WebClient webClient;
     private final ObjectMapper objectMapper;
+    private final ApiRateLimiter apiRateLimiter;
     
     @Lazy
     @Autowired
@@ -65,8 +70,9 @@ public class VRChatApiService {
     private static final Duration MIN_RETRY_BACKOFF = Duration.ofSeconds(1);
     private static final Duration MAX_RETRY_BACKOFF = Duration.ofMinutes(10);
 
-    public VRChatApiService(WebClient.Builder webClientBuilder, ObjectMapper objectMapper) {
+    public VRChatApiService(WebClient.Builder webClientBuilder, ObjectMapper objectMapper, ApiRateLimiter apiRateLimiter) {
         this.objectMapper = objectMapper;
+        this.apiRateLimiter = apiRateLimiter;
         
         // Create filter functions to log requests and responses
         ExchangeFilterFunction requestLoggingFilter = ExchangeFilterFunction.ofRequestProcessor(request -> {
@@ -444,48 +450,64 @@ public class VRChatApiService {
 
         // Define the core request logic as a deferred Mono
         Mono<VRChatUser> requestMono = Mono.defer(() -> {
-            WebClient.RequestHeadersSpec<?> requestSpec = webClient.get()
-                    .uri("/users/{userId}", vrcUid)
-                    .cookie("auth", this.authCookie);
+            // Apply rate limiting before making the API call
+            return Mono.fromCallable(() -> {
+                // This callable will be executed with rate limiting
+                // First we wait for rate limiting constraints, then proceed
+                apiRateLimiter.waitForThrottlingConstraints();
+                log.debug("Making rate-limited API call to fetch user: {}", vrcUid);
+                return true; // Just a signal to proceed
+            })
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(__ -> {
+                // Create and execute the actual API request
+                WebClient.RequestHeadersSpec<?> requestSpec = webClient.get()
+                        .uri("/users/{userId}", vrcUid)
+                        .cookie("auth", this.authCookie);
 
-            if (this.twoFactorAuthCookie != null) {
-                 log.debug("Adding 'twoFactorAuth' cookie to getUser request for {}", vrcUid);
-                 requestSpec = requestSpec.cookie("twoFactorAuth", this.twoFactorAuthCookie);
-            }
+                if (this.twoFactorAuthCookie != null) {
+                    log.debug("Adding 'twoFactorAuth' cookie to getUser request for {}", vrcUid);
+                    requestSpec = requestSpec.cookie("twoFactorAuth", this.twoFactorAuthCookie);
+                }
 
-            return requestSpec.exchangeToMono(response -> {
-                 log.debug("GET /users/{} response Status: {}", vrcUid, response.statusCode());
-                 log.trace("GET /users/{} response Headers: {}", vrcUid, response.headers().asHttpHeaders()); 
+                return requestSpec.exchangeToMono(response -> {
+                    log.debug("GET /users/{} response Status: {}", vrcUid, response.statusCode());
+                    log.trace("GET /users/{} response Headers: {}", vrcUid, response.headers().asHttpHeaders()); 
 
-                 Mono<String> bodyMono = response.bodyToMono(String.class).defaultIfEmpty("");
+                    Mono<String> bodyMono = response.bodyToMono(String.class).defaultIfEmpty("");
 
-                 if (response.statusCode().is2xxSuccessful()) {
-                     return bodyMono.flatMap(rawBody -> {
-                         // Log raw body at DEBUG level to ensure visibility
-                         log.debug("GET /users/{} response Body: {}", vrcUid, rawBody); 
-                         if (rawBody.contains("\"error\":")) { 
-                              log.warn("Error fetching user {}: API returned 2xx status but contains error payload: {}", vrcUid, rawBody);
-                              return Mono.error(new RuntimeException("API Error Payload: " + rawBody)); // Non-retryable API error
-                         }
-                         try {
-                             VRChatUser user = objectMapper.readValue(rawBody, VRChatUser.class);
-                             return Mono.just(user);
-                         } catch (Exception e) {
-                             log.error("Error parsing VRChatUser JSON for {} even after 2xx status: {}", vrcUid, e.getMessage(), e);
-                             return Mono.error(e); // Non-retryable parsing error
-                         }
-                     });
-                 } else {
-                      return bodyMono.flatMap(body -> {
-                           log.warn("Error fetching user {}. Status: {}, Body: {}", vrcUid, response.statusCode(), body);
-                           if (response.statusCode().value() == 401) {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return bodyMono.flatMap(rawBody -> {
+                            // Log raw body at DEBUG level to ensure visibility
+                            log.debug("GET /users/{} response Body: {}", vrcUid, rawBody); 
+                            if (rawBody.contains("\"error\":")) { 
+                                log.warn("Error fetching user {}: API returned 2xx status but contains error payload: {}", vrcUid, rawBody);
+                                return Mono.error(new RuntimeException("API Error Payload: " + rawBody)); // Non-retryable API error
+                            }
+                            try {
+                                VRChatUser user = objectMapper.readValue(rawBody, VRChatUser.class);
+                                return Mono.just(user);
+                            } catch (Exception e) {
+                                log.error("Error parsing VRChatUser JSON for {} even after 2xx status: {}", vrcUid, e.getMessage(), e);
+                                return Mono.error(e); // Non-retryable parsing error
+                            }
+                        });
+                    } else {
+                        return bodyMono.flatMap(body -> {
+                            log.warn("Error fetching user {}. Status: {}, Body: {}", vrcUid, response.statusCode(), body);
+                            if (response.statusCode().value() == 401) {
                                 log.warn("Received 401 Unauthorized fetching user {}. Session may have expired.", vrcUid);
                                 logout(); 
-                           }
-                           // Non-retryable HTTP error
-                           return Mono.error(new RuntimeException("HTTP Error " + response.statusCode() + " fetching user " + vrcUid));
-                      });
-                 }
+                            }
+                            // Non-retryable HTTP error
+                            return Mono.error(new RuntimeException("HTTP Error " + response.statusCode() + " fetching user " + vrcUid));
+                        });
+                    }
+                })
+                .doFinally(signalType -> {
+                    // Record completion time when the request finishes (success or error)
+                    apiRateLimiter.recordRequestFinished();
+                });
             });
         });
 

@@ -82,15 +82,13 @@ public class MonitoringService {
             return;
         }
         
-        // IMPORTANT: We carefully manage the timing of API requests to avoid overwhelming
-        // the VRChat API and potentially triggering rate limiting. The approach includes:
-        // 1. Staggering initial polls by 1 second per user
-        // 2. Using each user's configured poll rate (typically 10+ minutes per user)
-        // 3. Using scheduleWithFixedDelay (not scheduleAtFixedRate) to prevent overlapping requests
+        // IMPORTANT: API request throttling is now handled by ApiRateLimiter in VRChatApiService.
+        // This ensures:
+        // 1. At least 1 second between the start of any two VRChat API requests
+        // 2. At least 0.5 seconds after a request completes before starting the next
+        // 3. These limits apply across all users to prevent API rate limiting
         
-        // Queue initial polls for all users, staggered by 1 second to avoid request bursts
-        long initialDelayMs = 1000; // First poll happens 1 second after start
-        
+        // Start monitoring for each user
         for (UserConfig user : config.getUsers()) {
             // Cache user config for later lookups
             userConfigMap.put(user.getVrcUid(), user);
@@ -102,17 +100,15 @@ public class MonitoringService {
             // waits until the previous completes, which helps avoid API rate limits)
             ScheduledFuture<?> task = taskScheduler.scheduleWithFixedDelay(
                 () -> pollUserStatus(user),
-                new Date(System.currentTimeMillis() + initialDelayMs),
+                new Date(), // Start immediately - ApiRateLimiter will handle throttling
                 user.getPollRateDuration().toMillis()
             );
             scheduledTasks.put(user.getVrcUid(), task);
-            
-            // Stagger initial polls to avoid bursts of requests to the API
-            initialDelayMs += 1000; // Stagger initial polls by 1 second each
         }
         
         isRunning = true;
-        log.info("Monitoring started for {} users", config.getUsers().size());
+        log.info("Monitoring started for {} users - API throttling ensures proper rate limiting", 
+                 config.getUsers().size());
     }
     
     @PreDestroy
