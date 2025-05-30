@@ -9,4 +9,5 @@ import java.util.List;
 @NoArgsConstructor
 public class AppConfig {
     private List<UserConfig> users;
+    private Boolean logErrorsToFile = false; // Default to false if not specified in config
 } 

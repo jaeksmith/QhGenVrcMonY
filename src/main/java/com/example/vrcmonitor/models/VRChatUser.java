@@ -26,4 +26,28 @@ public class VRChatUser {
     private String bio;
     private String userIcon;
     // Add more fields as needed based on VRChat API documentation
+    
+    /**
+     * Gets the state with null-safety
+     * @return The state or "unknown" if null
+     */
+    public String getState() {
+        return state != null ? state : "unknown";
+    }
+    
+    /**
+     * Gets the status with null-safety
+     * @return The status or "unknown" if null
+     */
+    public String getStatus() {
+        return status != null ? status : "unknown";
+    }
+    
+    /**
+     * Gets the location with null-safety
+     * @return The location or "unknown" if null
+     */
+    public String getLocation() {
+        return location != null ? location : "unknown";
+    }
 } 

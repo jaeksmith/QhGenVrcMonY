@@ -27,13 +27,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const clientResponsesCheckbox = document.querySelector('input[type="checkbox"][data-filter="client-responses"]');
     const serverRequestsCheckbox = document.querySelector('input[type="checkbox"][data-filter="server-requests"]');
     const serverResponsesCheckbox = document.querySelector('input[type="checkbox"][data-filter="server-responses"]');
+    const clientLoggingCheckbox = document.querySelector('input[type="checkbox"][data-filter="client-logging"]');
     
     // Log storage - keeps logs in memory until they're displayed
     const logEntries = {
         clientRequests: [],
         clientResponses: [],
         serverRequests: [],
-        serverResponses: []
+        serverResponses: [],
+        clientLogging: []
     };
     
     // Maximum number of logs to store per category
@@ -101,8 +103,91 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Utility Functions ---
+    // Original console methods to preserve
+    const originalConsole = {
+        log: console.log,
+        warn: console.warn,
+        error: console.error,
+        debug: console.debug,
+        info: console.info
+    };
+
+    // Override console methods to capture logs
+    function setupConsoleCapture() {
+        console.log = function() {
+            originalConsole.log.apply(console, arguments);
+            captureConsoleLog('log', arguments);
+        };
+        
+        console.warn = function() {
+            originalConsole.warn.apply(console, arguments);
+            captureConsoleLog('warn', arguments);
+        };
+        
+        console.error = function() {
+            originalConsole.error.apply(console, arguments);
+            captureConsoleLog('error', arguments);
+        };
+        
+        console.debug = function() {
+            originalConsole.debug.apply(console, arguments);
+            captureConsoleLog('debug', arguments);
+        };
+        
+        console.info = function() {
+            originalConsole.info.apply(console, arguments);
+            captureConsoleLog('info', arguments);
+        };
+    }
+
+    // Capture console logs
+    function captureConsoleLog(level, args) {
+        // Convert arguments to array and join them
+        const argsArray = Array.from(args);
+        const message = argsArray.map(arg => {
+            if (typeof arg === 'object') {
+                try {
+                    return JSON.stringify(arg);
+                } catch(e) {
+                    return String(arg);
+                }
+            }
+            return String(arg);
+        }).join(' ');
+        
+        // Create a timestamp for this log entry
+        const timestamp = new Date();
+        
+        // Add to client logging array directly
+        const entry = {
+            timestamp: timestamp,
+            content: message,
+            level: level
+        };
+        logEntries.clientLogging.push(entry);
+        
+        // Trim if exceeds max size
+        if (logEntries.clientLogging.length > MAX_LOGS_PER_CATEGORY) {
+            logEntries.clientLogging.shift();
+        }
+        
+        // Update log console if it's visible and the filter is enabled
+        if (clientLoggingCheckbox && clientLoggingCheckbox.checked) {
+            updateLogConsole();
+        }
+    }
+
     function log(level, message) {
-        console[level](`[${new Date().toLocaleTimeString()}] ${message}`);
+        const now = new Date();
+        
+        // Use the original console methods to avoid capturing our own logs
+        switch(level) {
+            case 'debug': originalConsole.debug(`[${now.toLocaleTimeString()}] ${message}`); break;
+            case 'info': originalConsole.info(`[${now.toLocaleTimeString()}] ${message}`); break;
+            case 'warn': originalConsole.warn(`[${now.toLocaleTimeString()}] ${message}`); break;
+            case 'error': originalConsole.error(`[${now.toLocaleTimeString()}] ${message}`); break;
+            default: originalConsole.log(`[${now.toLocaleTimeString()}] ${message}`);
+        }
     }
 
     function formatTimestamp(isoString) {
@@ -115,22 +200,45 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function determineDisplayStatus(latestStateDTO) { 
-        if (!latestStateDTO) return 'ERROR'; 
-        if (latestStateDTO.statusType === 'ERROR') return 'ERROR';
-        if (!latestStateDTO.user || !latestStateDTO.user.state) return 'OTHER'; 
+        if (!latestStateDTO) {
+            log('error', 'determineDisplayStatus called with null state data');
+            return 'ERROR';
+        }
+        
+        // Handle server-reported error state
+        if (latestStateDTO.statusType === 'ERROR') {
+            log('debug', `User ${latestStateDTO.hrToken} has ERROR status: ${latestStateDTO.errorMessage || 'No error message'}`);
+            return 'ERROR';
+        }
+        
+        // Handle null user data (could happen during initialization or if API returns incomplete data)
+        if (!latestStateDTO.user) {
+            log('debug', `User ${latestStateDTO.hrToken} has null user data`);
+            return 'OTHER';
+        }
+        
+        // Handle null state within user object
+        if (!latestStateDTO.user.state) {
+            log('debug', `User ${latestStateDTO.hrToken} has null state property`);
+            return 'OTHER';
+        }
         
         const state = latestStateDTO.user.state.toLowerCase(); // Ensure lowercase for comparison
-        const location = latestStateDTO.user.location?.toLowerCase(); // Use optional chaining and lowercase
+        const status = latestStateDTO.user.status ? latestStateDTO.user.status.toLowerCase() : null;
+        const location = latestStateDTO.user.location ? latestStateDTO.user.location.toLowerCase() : null;
         
-        // Apply new logic
+        log('debug', `User ${latestStateDTO.hrToken} state="${state}", status="${status}", location="${location}"`);
+        
+        // Apply status determination logic
         if (state === 'online') {
             return 'ONLINE';
         } else if (state === 'active') {
             // Check location to differentiate online vs website
-            return location !== 'offline' ? 'ONLINE' : 'ON_WEBSITE';
+            return location && location !== 'offline' ? 'ONLINE' : 'ON_WEBSITE';
         } else if (state === 'offline') {
             return 'OFFLINE';
         } else {
+            log('warn', `Unknown state value for user ${latestStateDTO.hrToken}: "${state}"`);
             return 'OTHER'; // Any other state reported by API
         }
     }
@@ -1120,14 +1228,15 @@ document.addEventListener('DOMContentLoaded', () => {
         return sanitized;
     }
     
-    function addLogEntry(type, content, timestamp = new Date()) {
+    function addLogEntry(type, content, timestamp = new Date(), level = null) {
         // Sanitize content before storing
         const sanitizedContent = sanitizeLogContent(content);
         
-        // Create log entry object
+        // Create log entry object with optional level for client logging
         const logEntry = {
             timestamp: timestamp,
-            content: sanitizedContent
+            content: sanitizedContent,
+            level: level  // Add level property for client logging
         };
         
         // Add to appropriate log array
@@ -1155,6 +1264,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 logEntries.serverResponses.push(logEntry);
                 if (logEntries.serverResponses.length > MAX_LOGS_PER_CATEGORY) {
                     logEntries.serverResponses.shift();
+                }
+                break;
+            case 'client-logging':
+                logEntries.clientLogging.push(logEntry);
+                if (logEntries.clientLogging.length > MAX_LOGS_PER_CATEGORY) {
+                    logEntries.clientLogging.shift();
                 }
                 break;
         }
@@ -1217,6 +1332,16 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
+        if (clientLoggingCheckbox && clientLoggingCheckbox.checked) {
+            logEntries.clientLogging.forEach(entry => logsToShow.push({
+                timestamp: entry.timestamp,
+                type: 'client-logging',
+                content: entry.content,
+                level: entry.level,
+                style: 'color: #fa8'
+            }));
+        }
+        
         // Sort logs by timestamp
         logsToShow.sort((a, b) => a.timestamp - b.timestamp);
         
@@ -1243,6 +1368,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
                 case 'server-response':
                     prefix = '[SRes]';
+                    break;
+                case 'client-logging':
+                    prefix = `[CL:${log.level ? log.level.toUpperCase() : 'LOG'}]`;
                     break;
             }
             
@@ -1440,6 +1568,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (serverResponsesCheckbox) {
             serverResponsesCheckbox.addEventListener('change', updateLogConsole);
         }
+        if (clientLoggingCheckbox) {
+            clientLoggingCheckbox.addEventListener('change', updateLogConsole);
+        }
     }
     
     function setupLoginDialog() {
@@ -1478,6 +1609,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // Set up console capture
+    setupConsoleCapture();
 
     // Call initialize when document is loaded
     initialize();

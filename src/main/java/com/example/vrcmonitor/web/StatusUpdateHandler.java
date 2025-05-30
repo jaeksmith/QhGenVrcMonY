@@ -37,6 +37,7 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
     private final ConfigLoader configLoader; // To get HRTokens
     private final ObjectMapper objectMapper; // Use the configured one
     private final AuthService authService; // For session status
+    private final Object broadcastLock = new Object();
 
     public StatusUpdateHandler(UserStateService userStateService, ConfigLoader configLoader, ObjectMapper objectMapper, @Lazy AuthService authService) {
         this.userStateService = userStateService;
@@ -280,13 +281,26 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
             return;
         }
         
+        // Skip broadcasting if no active sessions to reduce unnecessary processing
+        if (sessions.isEmpty()) {
+            log.debug("No active sessions, skipping log broadcast");
+            return;
+        }
+        
         log.debug("Broadcasting log entry: type={}, timestamp={}", logEntry.getType(), logEntry.getTimestamp());
         
         try {
             WsMessageDTO message = new WsMessageDTO(WsMessageDTO.MessageType.LOG_ENTRY, logEntry);
-            broadcastMessage(message);
+            
+            // Use try-catch to prevent logging errors from affecting the application
+            try {
+                broadcastMessage(message);
+            } catch (Exception e) {
+                // Don't let WebSocket issues crash the application
+                log.error("Error broadcasting log entry (WebSocket error): {}", e.getMessage());
+            }
         } catch (Exception e) {
-            log.error("Error broadcasting log entry: {}", e.getMessage(), e);
+            log.error("Error preparing log entry for broadcast: {}", e.getMessage(), e);
         }
     }
 
@@ -296,7 +310,17 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
 
         TextMessage textMessage = new TextMessage(messageJson);
         log.debug("Broadcasting WebSocket message to {} sessions: {}", sessions.size(), messageJson);
-        sessions.forEach(session -> sendMessage(session, textMessage));
+        
+        // Synchronize to prevent concurrent sends to the same session
+        synchronized (broadcastLock) {
+            for (WebSocketSession session : sessions) {
+                try {
+                    sendMessage(session, textMessage);
+                } catch (Exception e) {
+                    log.warn("Error sending broadcast message to session {}: {}", session.getId(), e.getMessage());
+                }
+            }
+        }
     }
 
     private void sendMessage(WebSocketSession session, WsMessageDTO message) {
@@ -308,7 +332,9 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
     private void sendMessage(WebSocketSession session, TextMessage message) {
         try {
             if (session.isOpen()) {
-                session.sendMessage(message);
+                synchronized (session) {
+                    session.sendMessage(message);
+                }
             }
         } catch (IOException e) {
             log.error("Failed to send WebSocket message to session {}: {}", session.getId(), e.getMessage(), e);

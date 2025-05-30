@@ -28,6 +28,7 @@
                         <label><input type="checkbox" checked data-filter="client-responses"> This Client Responses</label>
                         <label><input type="checkbox" checked data-filter="server-requests"> Server Requests</label>
                         <label><input type="checkbox" checked data-filter="server-responses"> Server Responses</label>
+                        <label><input type="checkbox" checked data-filter="client-logging"> Client Logging</label>
                     </div>
                     <div class="log-console-output">
                         <!-- Simulated log lines will be added here -->
@@ -121,7 +122,7 @@
                     <p>Two-Factor Authentication Required</p>
                     <div class="login-field">
                         <label for="twofa-code">2FA Code:</label>
-                        <input type="text" id="twofa-code" placeholder="Enter 2FA Code" />
+                        <input type="text" id="twofa-code" placeholder="Enter 2FA Code" autocomplete="off" />
                     </div>
                     <div id="twofa-error-message" class="error-text"></div>
                 </div>

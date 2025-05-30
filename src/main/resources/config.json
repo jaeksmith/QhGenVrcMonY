@@ -1,4 +1,5 @@
 {
+  "logErrorsToFile": false,
   "users": [
    {
       "hrToken": "Jaek",

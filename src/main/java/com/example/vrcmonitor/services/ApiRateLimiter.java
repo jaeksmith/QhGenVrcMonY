@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -23,58 +24,78 @@ public class ApiRateLimiter {
     private static final Logger log = LoggerFactory.getLogger(ApiRateLimiter.class);
     
     // Minimum time between request starts (1 second)
-    private static final long MIN_TIME_BETWEEN_STARTS_MS = 1000;
+    private static final Duration MIN_TIME_BETWEEN_REQUESTS = Duration.ofSeconds(1);
     
     // Minimum time after a request finishes before the next can start (0.5 seconds)
-    private static final long MIN_TIME_AFTER_FINISH_MS = 500;
+    private static final Duration MIN_TIME_AFTER_COMPLETION = Duration.ofMillis(500);
     
     // Last request start and finish times
     private volatile Instant lastRequestStartTime = Instant.EPOCH;
     private volatile Instant lastRequestFinishTime = Instant.EPOCH;
     
+    // Add lock for thread safety
+    private final Object limiterLock = new Object();
+    
     /**
-     * Waits as needed to satisfy API rate limiting constraints:
-     * - At least 1 second since last request start
-     * - At least 0.5 seconds since last request finish
+     * Wait for throttling constraints to be satisfied before proceeding with a request.
+     * This ensures we're respecting both the time-since-last-start and time-since-last-finish rules.
      * 
-     * After waiting if needed, updates the request start time.
+     * @throws InterruptedException if the thread is interrupted while waiting
      */
-    public synchronized void waitForThrottlingConstraints() {
-        Instant now = Instant.now();
-        
-        // Calculate times since last request start and finish
-        long msSinceLastStart = now.toEpochMilli() - lastRequestStartTime.toEpochMilli();
-        long msSinceLastFinish = now.toEpochMilli() - lastRequestFinishTime.toEpochMilli();
-        
-        // Calculate how long we need to wait for each constraint
-        long msToWaitForStartConstraint = Math.max(0, MIN_TIME_BETWEEN_STARTS_MS - msSinceLastStart);
-        long msToWaitForFinishConstraint = Math.max(0, MIN_TIME_AFTER_FINISH_MS - msSinceLastFinish);
-        
-        // Take the maximum wait time to satisfy both constraints
-        long msToWait = Math.max(msToWaitForStartConstraint, msToWaitForFinishConstraint);
-        
-        if (msToWait > 0) {
-            try {
-                log.debug("Throttling API request: waiting {}ms ({}ms since last start, {}ms since last finish)",
-                        msToWait, msSinceLastStart, msSinceLastFinish);
-                Thread.sleep(msToWait);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("Throttling wait interrupted", e);
+    public void waitForThrottlingConstraints() throws InterruptedException {
+        synchronized (limiterLock) {
+            Instant now = Instant.now();
+            
+            // Check if we need to wait for the time-since-last-start rule
+            if (lastRequestStartTime != null) {
+                Duration timeSinceLastStart = Duration.between(lastRequestStartTime, now);
+                if (timeSinceLastStart.compareTo(MIN_TIME_BETWEEN_REQUESTS) < 0) {
+                    // Need to wait
+                    long waitTime = MIN_TIME_BETWEEN_REQUESTS.toMillis() - timeSinceLastStart.toMillis();
+                    log.debug("Rate limiting: Waiting {}ms to satisfy time-since-last-start constraint", waitTime);
+                    try {
+                        Thread.sleep(waitTime);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        log.warn("Rate limiting wait interrupted", e);
+                        throw e;
+                    }
+                }
             }
+            
+            // Check if we need to wait for the time-since-last-finish rule
+            if (lastRequestFinishTime != null) {
+                Instant updatedNow = Instant.now(); // Refresh current time
+                Duration timeSinceLastFinish = Duration.between(lastRequestFinishTime, updatedNow);
+                if (timeSinceLastFinish.compareTo(MIN_TIME_AFTER_COMPLETION) < 0) {
+                    // Need to wait
+                    long waitTime = MIN_TIME_AFTER_COMPLETION.toMillis() - timeSinceLastFinish.toMillis();
+                    log.debug("Rate limiting: Waiting {}ms to satisfy time-since-last-finish constraint", waitTime);
+                    try {
+                        Thread.sleep(waitTime);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        log.warn("Rate limiting wait interrupted", e);
+                        throw e;
+                    }
+                }
+            }
+            
+            // Update the start time
+            lastRequestStartTime = Instant.now();
+            log.debug("Rate limiting: Request started at {}", lastRequestStartTime);
         }
-        
-        // After potentially waiting, update the start time
-        lastRequestStartTime = Instant.now();
     }
     
     /**
      * Records that a request has finished, updating the finish timestamp.
      * This should be called when an API request completes (successfully or with error).
      */
-    public synchronized void recordRequestFinished() {
-        lastRequestFinishTime = Instant.now();
-        log.debug("Recorded API request completion at {}", lastRequestFinishTime);
+    public void recordRequestFinished() {
+        synchronized (limiterLock) {
+            lastRequestFinishTime = Instant.now();
+            log.debug("Recorded API request completion at {}", lastRequestFinishTime);
+        }
     }
     
     /**
@@ -90,7 +111,12 @@ public class ApiRateLimiter {
      */
     public <T> T executeWithRateLimit(Supplier<T> task) {
         // Wait as needed before starting
-        waitForThrottlingConstraints();
+        try {
+            waitForThrottlingConstraints();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Throttling wait interrupted", e);
+        }
         
         try {
             // Execute the task
@@ -111,7 +137,12 @@ public class ApiRateLimiter {
      */
     public <T> CompletableFuture<T> executeWithRateLimitAsync(Supplier<CompletableFuture<T>> asyncTask) {
         // Wait as needed before starting
-        waitForThrottlingConstraints();
+        try {
+            waitForThrottlingConstraints();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Throttling wait interrupted", e);
+        }
         
         // Start the async task
         CompletableFuture<T> future = asyncTask.get();

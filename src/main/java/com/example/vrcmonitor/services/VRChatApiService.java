@@ -41,6 +41,7 @@ import com.example.vrcmonitor.services.ApiRateLimiter;
 import reactor.core.scheduler.Schedulers;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+import com.example.vrcmonitor.logging.ErrorFileLogger;
 
 @Service
 public class VRChatApiService {
@@ -53,6 +54,7 @@ public class VRChatApiService {
     private final WebClient webClient;
     private final ObjectMapper objectMapper;
     private final ApiRateLimiter apiRateLimiter;
+    private final ErrorFileLogger errorFileLogger;
     
     @Lazy
     @Autowired
@@ -70,9 +72,10 @@ public class VRChatApiService {
     private static final Duration MIN_RETRY_BACKOFF = Duration.ofSeconds(1);
     private static final Duration MAX_RETRY_BACKOFF = Duration.ofMinutes(10);
 
-    public VRChatApiService(WebClient.Builder webClientBuilder, ObjectMapper objectMapper, ApiRateLimiter apiRateLimiter) {
+    public VRChatApiService(WebClient.Builder webClientBuilder, ObjectMapper objectMapper, ApiRateLimiter apiRateLimiter, ErrorFileLogger errorFileLogger) {
         this.objectMapper = objectMapper;
         this.apiRateLimiter = apiRateLimiter;
+        this.errorFileLogger = errorFileLogger;
         
         // Create filter functions to log requests and responses
         ExchangeFilterFunction requestLoggingFilter = ExchangeFilterFunction.ofRequestProcessor(request -> {
@@ -117,6 +120,7 @@ public class VRChatApiService {
                         }
                     } catch (Exception e) {
                         log.error("Error broadcasting response log: {}", e.getMessage(), e);
+                        errorFileLogger.logError("Error broadcasting response log", e);
                     }
                     
                     // Return the original body text
@@ -173,10 +177,7 @@ public class VRChatApiService {
         // Log body if available (this might be limited due to how WebClient works)
         // Note: This is simplified as full body logging requires more complex setup
         
-        // Sanitize sensitive information
         String sanitizedLog = sanitizeLogContent(logBuilder.toString());
-        
-        // Log locally
         log.debug("VRChat API Request: {}", sanitizedLog);
         
         // Broadcast to clients if handler is available
@@ -189,6 +190,7 @@ public class VRChatApiService {
             }
         } catch (Exception e) {
             log.error("Error broadcasting request log: {}", e.getMessage(), e);
+            errorFileLogger.logError("Error broadcasting request log", e);
         }
     }
     
@@ -369,7 +371,8 @@ public class VRChatApiService {
         }
         
         final String initialAuthCookieValue = this.authCookie;
-        this.authCookie = null; // Clear potentially temporary auth cookie
+        // Don't clear the auth cookie before verification, keep it until we have a confirmed new one
+        // this.authCookie = null; -- REMOVE THIS LINE
 
         String verificationUri;
         if ("emailOtp".equalsIgnoreCase(this.required2faType)) {
@@ -450,93 +453,164 @@ public class VRChatApiService {
 
         // Define the core request logic as a deferred Mono
         Mono<VRChatUser> requestMono = Mono.defer(() -> {
+            // Check auth cookie again inside the deferred execution
+            // to catch any auth cookie that was cleared by another request
+            if (authCookie == null) {
+                log.warn("Auth Cookie was cleared during wait. Cannot fetch user ID: {}. Please login again.", vrcUid);
+                return Mono.empty();
+            }
+
             // Apply rate limiting before making the API call
             return Mono.fromCallable(() -> {
                 // This callable will be executed with rate limiting
                 // First we wait for rate limiting constraints, then proceed
                 apiRateLimiter.waitForThrottlingConstraints();
-                log.debug("Making rate-limited API call to fetch user: {}", vrcUid);
-                return true; // Just a signal to proceed
+                return true;
             })
-            .subscribeOn(Schedulers.boundedElastic())
-            .flatMap(__ -> {
-                // Create and execute the actual API request
-                WebClient.RequestHeadersSpec<?> requestSpec = webClient.get()
-                        .uri("/users/{userId}", vrcUid)
-                        .cookie("auth", this.authCookie);
-
-                if (this.twoFactorAuthCookie != null) {
-                    log.debug("Adding 'twoFactorAuth' cookie to getUser request for {}", vrcUid);
-                    requestSpec = requestSpec.cookie("twoFactorAuth", this.twoFactorAuthCookie);
+            .onErrorResume(e -> {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                    return Mono.error(new RuntimeException("Rate limiting wait interrupted", e));
                 }
-
-                return requestSpec.exchangeToMono(response -> {
-                    log.debug("GET /users/{} response Status: {}", vrcUid, response.statusCode());
-                    log.trace("GET /users/{} response Headers: {}", vrcUid, response.headers().asHttpHeaders()); 
-
-                    Mono<String> bodyMono = response.bodyToMono(String.class).defaultIfEmpty("");
-
-                    if (response.statusCode().is2xxSuccessful()) {
-                        return bodyMono.flatMap(rawBody -> {
-                            // Log raw body at DEBUG level to ensure visibility
-                            log.debug("GET /users/{} response Body: {}", vrcUid, rawBody); 
-                            if (rawBody.contains("\"error\":")) { 
-                                log.warn("Error fetching user {}: API returned 2xx status but contains error payload: {}", vrcUid, rawBody);
-                                return Mono.error(new RuntimeException("API Error Payload: " + rawBody)); // Non-retryable API error
-                            }
-                            try {
-                                VRChatUser user = objectMapper.readValue(rawBody, VRChatUser.class);
-                                return Mono.just(user);
-                            } catch (Exception e) {
-                                log.error("Error parsing VRChatUser JSON for {} even after 2xx status: {}", vrcUid, e.getMessage(), e);
-                                return Mono.error(e); // Non-retryable parsing error
-                            }
-                        });
-                    } else {
-                        return bodyMono.flatMap(body -> {
-                            log.warn("Error fetching user {}. Status: {}, Body: {}", vrcUid, response.statusCode(), body);
-                            if (response.statusCode().value() == 401) {
-                                log.warn("Received 401 Unauthorized fetching user {}. Session may have expired.", vrcUid);
-                                logout(); 
-                            }
-                            // Non-retryable HTTP error
-                            return Mono.error(new RuntimeException("HTTP Error " + response.statusCode() + " fetching user " + vrcUid));
-                        });
-                    }
-                })
-                .doFinally(signalType -> {
-                    // Record completion time when the request finishes (success or error)
-                    apiRateLimiter.recordRequestFinished();
-                });
-            });
+                return Mono.error(e);
+            })
+            .flatMap(readyToFetch -> {
+                // Final auth cookie check before API call
+                if (authCookie == null) {
+                    log.warn("Auth Cookie was cleared by another thread. Cannot fetch user ID: {}.", vrcUid);
+                    return Mono.empty();
+                }
+                
+                // Now make the actual API call
+                String userEndpoint = "/users/" + vrcUid;
+                
+                log.debug("Fetching user data for: {}", vrcUid);
+                
+                final String currentAuthCookie = authCookie; // Capture current value
+                final String currentTwoFactorCookie = twoFactorAuthCookie; // Capture current value
+                
+                // Build the complete cookie string properly
+                String cookieHeader = "auth=" + currentAuthCookie;
+                if (currentTwoFactorCookie != null && !currentTwoFactorCookie.isEmpty()) {
+                    cookieHeader += "; twoFactorAuth=" + currentTwoFactorCookie;
+                }
+                
+                return webClient.get()
+                    .uri(userEndpoint)
+                    .header(HttpHeaders.COOKIE, cookieHeader)
+                    .retrieve()
+                    .onStatus(status -> status.equals(HttpStatusCode.valueOf(401)), 
+                              response -> {
+                                  log.warn("Authentication failed (401) for user {}, clearing session", vrcUid);
+                                  
+                                  // For the first request after login, try to get the error message
+                                  return response.bodyToMono(String.class)
+                                    .defaultIfEmpty("{}")
+                                    .flatMap(body -> {
+                                        log.error("Auth error details: {}", body);
+                                        // Only clear auth cookies if this is a genuine auth error
+                                        // Log but don't clear on first try as this might be a temporary issue
+                                        if (body.contains("Missing Credentials")) {
+                                            errorFileLogger.logApiError("Authentication failure", 401, body);
+                                        }
+                                        
+                                        // Don't clear auth cookies on the first try
+                                        // Let the system retry this request first
+                                        return Mono.error(new RuntimeException("Authentication error: " + body));
+                                    });
+                              })
+                    .toEntity(String.class)
+                    .flatMap(response -> {
+                        String rawBody = response.getBody();
+                        Mono<String> bodyMono = Mono.justOrEmpty(rawBody);
+                        
+                        if (response.getStatusCode().is2xxSuccessful()) {
+                            return bodyMono.flatMap(body -> {
+                                // Log raw body at DEBUG level to ensure visibility
+                                log.debug("GET /users/{} response Body: {}", vrcUid, body); 
+                                
+                                if (body.contains("\"error\":")) { 
+                                    String errorMsg = "API returned 2xx status but contains error payload: " + body;
+                                    log.warn("Error fetching user {}: {}", vrcUid, errorMsg);
+                                    errorFileLogger.logApiError("GET /users/" + vrcUid, response.getStatusCode().value(), body);
+                                    return Mono.error(new RuntimeException(errorMsg));
+                                }
+                                
+                                try {
+                                    VRChatUser user = objectMapper.readValue(body, VRChatUser.class);
+                                    
+                                    // Add additional debug logging for user state
+                                    log.debug("Successfully parsed user data for {}: state={}, status={}, location={}",
+                                             vrcUid, user.getState(), user.getStatus(), user.getLocation());
+                                    
+                                    return Mono.just(user);
+                                } catch (Exception e) {
+                                    String errorMsg = "Error parsing VRChatUser JSON: " + e.getMessage();
+                                    log.error("{} for {}: {}", errorMsg, vrcUid, body, e);
+                                    errorFileLogger.logError(errorMsg + " for " + vrcUid + ": " + body, e);
+                                    return Mono.error(e);
+                                }
+                            });
+                        } else {
+                            return bodyMono.flatMap(body -> {
+                                String errorMsg = "Error fetching user " + vrcUid + ". Status: " + response.getStatusCode() + ", Body: " + body;
+                                log.warn(errorMsg);
+                                errorFileLogger.logApiError("GET /users/" + vrcUid, response.getStatusCode().value(), body);
+                                
+                                if (response.getStatusCode().value() == 401) {
+                                    log.warn("Received 401 Unauthorized fetching user {}. Session may have expired.", vrcUid);
+                                    logout();
+                                }
+                                
+                                return Mono.error(new RuntimeException(errorMsg));
+                            });
+                        }
+                    })
+                    .doFinally(signalType -> {
+                        // Record completion time when the request finishes (success or error)
+                        apiRateLimiter.recordRequestFinished();
+                        log.debug("Request for user {} completed with signal: {}", vrcUid, signalType);
+                    });
+            }).subscribeOn(Schedulers.boundedElastic());
         });
 
-        // Apply retry logic ONLY to specific network/transient errors
+        // Apply retry logic ONLY to specific network/transient errors, NOT 401s
         return requestMono.retryWhen(Retry.backoff(MAX_RETRY_ATTEMPTS, MIN_RETRY_BACKOFF)
                 .maxBackoff(MAX_RETRY_BACKOFF)
                 .filter(this::isRetryableError) // Filter specific exceptions
-                .doBeforeRetry(retrySignal -> 
+                .doBeforeRetry(retrySignal -> {
                     log.warn("Retrying user fetch for {} due to error (Attempt {}): {}", 
                              vrcUid, 
                              retrySignal.totalRetries() + 1,
-                             retrySignal.failure().getMessage()))
+                             retrySignal.failure().getMessage());
+                    errorFileLogger.logError("Retrying user fetch for " + vrcUid + " (Attempt " + 
+                                           (retrySignal.totalRetries() + 1) + ")", retrySignal.failure());
+                })
                 .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
                     // This exception is thrown when retries are exhausted
                     log.error("Retries exhausted for user fetch {}. Last error: {}", vrcUid, retrySignal.failure().getMessage());
+                    errorFileLogger.logError("Retries exhausted for user fetch " + vrcUid, retrySignal.failure());
+                    
+                    // Clear session after retries are exhausted for auth errors
+                    if (retrySignal.failure().getMessage() != null && 
+                        retrySignal.failure().getMessage().contains("Authentication error")) {
+                        log.error("Authentication error persisted after retries, clearing session");
+                        logout();
+                    }
+                    
                     return retrySignal.failure(); // Re-throw the last error
                 }))
             .onErrorResume(error -> {
-                // Catch non-retryable errors, exhausted retry errors, or other exceptions
-                // Logged within the retry logic or the main body, just return empty here
-                if (!(error instanceof RuntimeException && error.getMessage().contains("Retries exhausted"))) {
-                     // Avoid double logging errors already logged within the main try block
-                    if (!(error instanceof RuntimeException && error.getMessage().startsWith("HTTP Error")) && 
-                        !(error instanceof RuntimeException && error.getMessage().startsWith("API Error Payload")) && 
-                        !(error.getCause() instanceof com.fasterxml.jackson.core.JsonProcessingException) ) {
-                         log.error("Non-retryable error during user fetch for {}: {}", vrcUid, error.getMessage(), error);
-                    }
+                // Don't retry authentication errors (401) after retries are exhausted
+                if (error.getMessage() != null && error.getMessage().contains("Authentication failed")) {
+                    log.error("Non-retryable error during user fetch for {}: {}", vrcUid, error.getMessage());
+                    errorFileLogger.logError("Non-retryable error during user fetch for " + vrcUid + ": " + error.getMessage(), error);
+                    return Mono.empty(); // Return empty for auth errors instead of propagating
                 }
-                return Mono.empty(); // Return empty for monitoring service
+                
+                // Network errors may have already been retried, but we'll let them propagate
+                log.error("Error during user fetch for {}: {}", vrcUid, error.getMessage(), error);
+                return Mono.error(error);
             });
     }
 

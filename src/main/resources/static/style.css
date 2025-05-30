@@ -728,4 +728,25 @@ body {
 #disconnected-time {
     font-weight: bold;
     color: #ff6b6b;
+}
+
+/* Log levels styling */
+.log-item.client-logging.log-level-error {
+    color: #f66;
+}
+
+.log-item.client-logging.log-level-warn {
+    color: #fa6;
+}
+
+.log-item.client-logging.log-level-info {
+    color: #6af;
+}
+
+.log-item.client-logging.log-level-debug {
+    color: #999;
+}
+
+.log-item.client-logging.log-level-log {
+    color: #ddd;
 } 
