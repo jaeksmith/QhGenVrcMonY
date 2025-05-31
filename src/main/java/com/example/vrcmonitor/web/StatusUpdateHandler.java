@@ -78,6 +78,9 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
      * Broadcasts the current session status to all connected clients
      */
     public void broadcastSessionStatus() {
+        log.info("Broadcasting session status: hasActiveSession={}, lastSessionTime={}", 
+                authService.hasActiveSession(), authService.getLastSessionTime());
+        
         SessionStatusDTO sessionStatus = new SessionStatusDTO(
                 authService.hasActiveSession(),
                 authService.getLastSessionTime(),
@@ -90,15 +93,19 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
                 sessionStatus
         );
         
+        int sessionCount = sessions.size();
+        log.debug("Broadcasting session status to {} active WebSocket sessions", sessionCount);
         broadcastMessage(message);
         
         // If we just got a session, send initial state to all clients
         if (authService.hasActiveSession()) {
             for (WebSocketSession session : sessions) {
                 try {
+                    log.debug("Sending initial state to session {} after session update", session.getId());
                     sendInitialState(session);
                 } catch (Exception e) {
-                    log.error("Error sending initial state after session update", e);
+                    log.error("Error sending initial state after session update to session {}: {}", 
+                             session.getId(), e.getMessage(), e);
                 }
             }
         }
@@ -349,6 +356,29 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize object to JSON for WebSocket: {}", e.getMessage(), e);
             return null;
+        }
+    }
+
+    /**
+     * Broadcasts a client API request to all connected WebSocket clients
+     * @param requestDetails The details of the request
+     */
+    public void broadcastClientRequest(String requestDetails) {
+        if (sessions.isEmpty()) {
+            log.debug("No active sessions, skipping client request broadcast");
+            return;
+        }
+        
+        try {
+            LogEntryDTO logEntry = new LogEntryDTO(
+                "client-request",
+                requestDetails,
+                Instant.now()
+            );
+            
+            broadcastLogEntry(logEntry);
+        } catch (Exception e) {
+            log.warn("Error broadcasting client request: {}", e.getMessage());
         }
     }
 } 

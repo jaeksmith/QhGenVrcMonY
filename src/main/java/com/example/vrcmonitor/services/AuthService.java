@@ -2,9 +2,11 @@ package com.example.vrcmonitor.services;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.annotation.Lazy;
+import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
+import jakarta.annotation.PostConstruct;
+import com.example.vrcmonitor.web.StatusUpdateHandler;
 
 import java.io.Console;
 import java.util.Arrays;
@@ -24,12 +26,84 @@ public class AuthService {
     private Instant lastSessionTime = null;
 
     private final VRChatApiService vrchatApiService;
-    private final MonitoringService monitoringService;
+    private final ApplicationContext applicationContext;  // Use ApplicationContext instead of direct reference
 
-    // Inject VRChatApiService and MonitoringService
-    public AuthService(VRChatApiService vrchatApiService, @Lazy MonitoringService monitoringService) {
+    // Inject VRChatApiService and ApplicationContext
+    public AuthService(VRChatApiService vrchatApiService, ApplicationContext applicationContext) {
         this.vrchatApiService = vrchatApiService;
-        this.monitoringService = monitoringService;
+        this.applicationContext = applicationContext;
+    }
+
+    /**
+     * Validates the session on application startup.
+     * If a session was restored from cache, this will verify if it's still valid
+     * by making a test API call to VRChat.
+     */
+    @PostConstruct
+    public void validateRestoredSession() {
+        // Check if we have auth cookies (restored from cache)
+        if (vrchatApiService.getAuthCookie() != null) {
+            log.info("Session cookies found, validating restored session...");
+            
+            // Get a valid user ID for validation
+            String testUserId = null;
+            
+            // Safer way to check if the cookie is valid - just do a self user lookup
+            // which should work with any valid session
+            try {
+                // Use test API call to validate with self user endpoint instead
+                vrchatApiService.getCurrentUser()
+                    .doOnNext(user -> {
+                        // If we got a response without error, the session is valid
+                        log.info("Restored session is valid, user: {}", user.getDisplayName());
+                        hasActiveSession.set(true);
+                        lastSessionTime = Instant.now();
+                        startMonitoring();
+                        
+                        // Broadcast the session status to all clients after slight delay
+                        // to ensure WebSocket connections are established
+                        try {
+                            // Short delay to allow WebSocket connections to be established
+                            Thread.sleep(1000);
+                            
+                            // Get StatusUpdateHandler to broadcast session status
+                            try {
+                                StatusUpdateHandler statusHandler = applicationContext.getBean(StatusUpdateHandler.class);
+                                statusHandler.broadcastSessionStatus();
+                                log.debug("Session status broadcast after successful session restoration");
+                            } catch (Exception e) {
+                                log.warn("Could not broadcast session status: {}", e.getMessage());
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            log.warn("Session status broadcast delay interrupted");
+                        }
+                    })
+                    .doOnError(error -> {
+                        // If we got an authentication error, the session is invalid
+                        log.warn("Restored session validation failed: {}", error.getMessage());
+                        hasActiveSession.set(false);
+                        // Clear the invalid session
+                        vrchatApiService.logout();
+                    })
+                    .onErrorResume(e -> Mono.empty()) // Don't propagate errors
+                    .subscribe();
+            } catch (Exception e) {
+                log.error("Error validating restored session: {}", e.getMessage());
+            }
+        } else {
+            log.debug("No session cookies found, skipping validation");
+        }
+    }
+
+    // Helper method to start monitoring via ApplicationContext to avoid circular dependency
+    private void startMonitoring() {
+        try {
+            MonitoringService monitoringService = applicationContext.getBean(MonitoringService.class);
+            monitoringService.startMonitoring();
+        } catch (Exception e) {
+            log.error("Failed to start monitoring: {}", e.getMessage());
+        }
     }
 
     // Use real VRChat API interaction. Returns specific result code.
@@ -74,7 +148,7 @@ public class AuthService {
                     if (result == VRChatApiService.LoginResult.SUCCESS) {
                         hasActiveSession.set(true);
                         lastSessionTime = Instant.now();
-                        monitoringService.startMonitoring();
+                        startMonitoring(); // Use the helper method
                         log.info("Authentication successful via client login.");
                     }
                 });
@@ -95,7 +169,7 @@ public class AuthService {
                 if (result == VRChatApiService.LoginResult.SUCCESS) {
                     hasActiveSession.set(true);
                     lastSessionTime = Instant.now();
-                    monitoringService.startMonitoring();
+                    startMonitoring(); // Use the helper method
                     log.info("2FA verification successful via client.");
                 }
             });

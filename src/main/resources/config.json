@@ -1,5 +1,6 @@
 {
   "logErrorsToFile": false,
+  "fileCacheSesssionInfo": false,
   "users": [
    {
       "hrToken": "Jaek",

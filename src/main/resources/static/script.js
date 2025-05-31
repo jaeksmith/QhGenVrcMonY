@@ -482,11 +482,15 @@ document.addEventListener('DOMContentLoaded', () => {
         websocket.onopen = (event) => {
             log('info', 'WebSocket connection established.');
             connectionStatus = 'open';
-            statusMessage = 'Connected. Waiting for initial state...';
-            updateUI();
+            statusMessage = 'WebSocket connected. Waiting for data...';
+            renderStatusLine();
             
             // Log client-side connection
-            addLogEntry('client-request', `WebSocket connection opened to ${wsUri}`);
+            addLogEntry('client-response', 'WebSocket connection established');
+            
+            // Request a refresh immediately to get latest session status and data
+            log('info', 'Sending REFRESH request after WebSocket connection established');
+            websocket.send('REFRESH');
         };
 
         websocket.onclose = (event) => {
@@ -737,9 +741,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 hideLoginDialog();
                 // Update status message
                 statusMessage = 'Connected with active session';
+                
+                // Force immediate UI update to reflect the new session status
+                renderStatusLine();
+                
                 // Trigger a refresh to get latest user states
                 if (websocket && websocket.readyState === WebSocket.OPEN) {
-                    log('info', 'Sending REFRESH request after login...');
+                    log('info', 'Sending REFRESH request after login or session restoration...');
                     websocket.send('REFRESH');
                 }
             }

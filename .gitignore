@@ -4,6 +4,9 @@
 # But allow the default config.json in resources
 !/src/main/resources/config.json
 
+# Session cache file
+/vrc_session_cache.json
+
 # Maven
 target/
 !.mvn/wrapper/maven-wrapper.jar

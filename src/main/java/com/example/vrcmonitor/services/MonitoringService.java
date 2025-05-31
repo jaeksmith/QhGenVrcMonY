@@ -179,4 +179,17 @@ public class MonitoringService {
             statusUpdateHandler.broadcastStatusUpdate(state);
         }
     }
+
+    // Add a helper method to get the first user ID for session validation
+    public String getFirstUserIdForValidation() {
+        AppConfig config = configLoader.getConfig();
+        if (config != null && config.getUsers() != null && !config.getUsers().isEmpty()) {
+            UserConfig firstUser = config.getUsers().get(0);
+            if (firstUser != null && firstUser.getVrcUid() != null && !firstUser.getVrcUid().isBlank()) {
+                log.debug("Using user {} for session validation", firstUser.getHrToken());
+                return firstUser.getVrcUid();
+            }
+        }
+        return null;
+    }
 } 
