@@ -4,7 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VRChat Monitor</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20230531001">
+    <!-- Prevent browser caching with these meta tags -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    
+    <!-- Dynamically add timestamp to CSS -->
+    <script>
+        document.write('<link rel="stylesheet" href="style.css?v=' + new Date().getTime() + '">');
+    </script>
+    <noscript>
+        <link rel="stylesheet" href="style.css">
+    </noscript>
 </head>
 <body>
     <div id="status-line" class="collapsed">
@@ -138,6 +150,12 @@
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <!-- Dynamically add timestamp to JS -->
+    <script>
+        document.write('<script src="script.js?v=' + new Date().getTime() + '"><\/script>');
+    </script>
+    <noscript>
+        <script src="script.js"></script>
+    </noscript>
 </body>
 </html> 

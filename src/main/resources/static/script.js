@@ -1,4 +1,64 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // We'll fetch the actual build timestamp from the server
+    let buildTimestamp = "Unknown"; // Default value
+    
+    // Function to fetch build info from server
+    const fetchBuildInfo = async () => {
+        try {
+            const response = await fetch('/api/system/build-info');
+            if (response.ok) {
+                const buildInfo = await response.json();
+                buildTimestamp = buildInfo.buildTime || "Unknown";
+                log('info', `Received build timestamp from server: ${buildTimestamp}`);
+                
+                // Update the admin panel with the real build timestamp
+                updateVersionDisplay();
+            } else {
+                log('warn', `Failed to fetch build info: ${response.status}`);
+            }
+        } catch (error) {
+            log('error', `Error fetching build info: ${error.message}`);
+        }
+    };
+    
+    // Try to fetch build info
+    fetchBuildInfo();
+    
+    // TEST: Add console message to verify script update
+    console.log(`SCRIPT UPDATE TEST: Build time will be fetched from server`);
+    
+    // Add version info to the admin panel instead of a floating marker
+    const updateVersionDisplay = () => {
+        const adminPanel = document.getElementById('admin-ops');
+        if (adminPanel) {
+            // Remove any existing version info
+            const existingInfo = adminPanel.querySelector('.version-info');
+            if (existingInfo) {
+                existingInfo.parentNode.removeChild(existingInfo);
+            }
+            
+            const versionInfo = document.createElement('div');
+            versionInfo.className = 'version-info';
+            versionInfo.innerHTML = `<p>UI Build: ${buildTimestamp}</p>`;
+            versionInfo.style.marginTop = '20px';
+            versionInfo.style.padding = '5px';
+            versionInfo.style.backgroundColor = '#444';
+            versionInfo.style.borderRadius = '4px';
+            versionInfo.style.fontSize = '0.9em';
+            
+            // Find admin-controls div and append after it
+            const adminControls = adminPanel.querySelector('.admin-controls');
+            if (adminControls) {
+                adminControls.appendChild(versionInfo);
+            } else {
+                adminPanel.appendChild(versionInfo);
+            }
+        }
+    };
+    
+    // Call this after a short delay to ensure DOM is ready
+    setTimeout(updateVersionDisplay, 500);
+    
     const wsUri = `ws://${window.location.host}/ws/status`;
     let websocket;
     let userData = new Map(); // Store user data by vrcUid { latestState: DTO, previousState: DTO }
@@ -45,6 +105,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let serverStartTime = null;
     let startTime = new Date(); // Client start time (fallback)
     let uptimeInterval;
+
+    // Variables for connection management
+    let isServerShuttingDown = false;
+    let reconnectAttempts = 0;
+    let maxReconnectDelay = 5 * 60 * 1000; // 5 minutes in milliseconds
+    let reconnectIncrement = 5 * 1000; // 5 seconds in milliseconds (changed from 15)
+    let reconnectTimer = null;
+    let disconnectionMessage = null;
 
     // --- DOM Elements ---
     const websocketStatusDot = document.getElementById('websocket-status');
@@ -472,10 +540,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- WebSocket Handling ---
     function connectWebSocket() {
+        // Clear any active countdown
+        if (countdownInterval) {
+            clearInterval(countdownInterval);
+            countdownInterval = null;
+        }
+        
+        // Clear any scheduled reconnect
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+    
         log('info', `Attempting to connect to ${wsUri}...`);
         connectionStatus = 'connecting';
         statusMessage = 'Connecting...';
         updateUI();
+
+        // Update reconnection message if it exists
+        if (disconnectionMessage) {
+            const reconnectInfo = disconnectionMessage.querySelector('.reconnect-info');
+            if (reconnectInfo) {
+                reconnectInfo.textContent = 'Connecting...';
+            }
+        }
 
         websocket = new WebSocket(wsUri);
 
@@ -484,6 +572,25 @@ document.addEventListener('DOMContentLoaded', () => {
             connectionStatus = 'open';
             statusMessage = 'WebSocket connected. Waiting for data...';
             renderStatusLine();
+            
+            // Reset reconnection attempts on successful connection
+            reconnectAttempts = 0;
+            
+            // Reset shutdown state
+            isServerShuttingDown = false;
+            
+            // Re-enable control buttons
+            const shutdownBtn = document.getElementById('shutdown-server-btn');
+            const refreshBtn = document.getElementById('refresh-button');
+            if (shutdownBtn) shutdownBtn.disabled = false;
+            if (refreshBtn) refreshBtn.disabled = false;
+            
+            // Refresh admin button handlers
+            refreshAdminButtonHandlers();
+            
+            // Remove any disconnection message if present
+            removeAllShutdownMessages();
+            disconnectionMessage = null;
             
             // Log client-side connection
             addLogEntry('client-response', 'WebSocket connection established');
@@ -503,8 +610,21 @@ document.addEventListener('DOMContentLoaded', () => {
             // Log client-side disconnection
             addLogEntry('client-response', `WebSocket connection closed: Code=${event.code}, Reason='${event.reason}'`);
             
-            // Simple reconnect attempt after a delay
-            setTimeout(connectWebSocket, 5000); 
+            // Handle the disconnection differently based on whether the server is shutting down
+            if (isServerShuttingDown) {
+                // Server is shutting down, show disconnection message after a delay
+                setTimeout(() => {
+                    // Convert the existing shutdown message to the unavailable message
+                    // rather than creating a new one
+                    showServerUnavailableMessage();
+                    
+                    // Start the reconnection sequence
+                    scheduleReconnect();
+                }, 5000); // 5 second delay to show shutdown message first
+            } else {
+                // Normal disconnection (not from shutdown), try to reconnect quickly
+                setTimeout(connectWebSocket, 5000);
+            }
         };
 
         websocket.onerror = (event) => {
@@ -635,13 +755,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     case 'SYSTEM':
                         log('info', `Processing SYSTEM message: ${JSON.stringify(message.payload)}`);
                         if (message.payload && message.payload.action === 'SHUTDOWN') {
+                            // Remove any existing shutdown/disconnection messages first
+                            removeAllShutdownMessages();
+                            
+                            // Mark that we're in a shutdown state
+                            isServerShuttingDown = true;
+                            
                             // Display shutdown message
-                            const shutdownMessage = document.createElement('div');
-                            shutdownMessage.className = 'shutdown-message';
-                            shutdownMessage.innerHTML = '<h3>Server Shutdown In Progress</h3>' + 
-                                '<p>The server is shutting down by administrator request.</p>' +
-                                '<p>This page will no longer be functional. You may close this window.</p>';
-                            document.body.appendChild(shutdownMessage);
+                            disconnectionMessage = document.createElement('div');
+                            disconnectionMessage.className = 'shutdown-message disconnection-message';
+                            disconnectionMessage.innerHTML = `
+                                <h3>Server Shutdown Initiated</h3>
+                                <p>The server is shutting down. Waiting for server to disconnect...</p>
+                                <p>You may close this window.</p>
+                            `;
+                            document.body.appendChild(disconnectionMessage);
+                            
+                            // Make the message draggable
+                            makeDraggable(disconnectionMessage);
                             
                             // Disable all interactive elements
                             document.getElementById('shutdown-server-btn').disabled = true;
@@ -652,9 +783,15 @@ document.addEventListener('DOMContentLoaded', () => {
                             statusMessage = 'Server is shutting down...';
                             renderStatusLine();
                             
-                            // Don't attempt to reconnect
+                            // Don't attempt to reconnect immediately
                             websocket.onclose = () => {
                                 log('info', 'WebSocket closed due to server shutdown.');
+                                
+                                // After a short delay, show the server unavailable message
+                                setTimeout(() => {
+                                    showServerUnavailableMessage();
+                                    scheduleReconnect();
+                                }, 5000); // 5 second delay to show shutdown message first
                             };
                         }
                         break;
@@ -1397,6 +1534,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const dialog = document.getElementById('confirm-dialog');
         const confirmYesBtn = document.getElementById('confirm-yes');
         const confirmNoBtn = document.getElementById('confirm-no');
+        const shutdownBtn = document.getElementById('shutdown-server-btn');
+        
+        // Make sure we're using a fresh event listener approach
+        if (shutdownBtn) {
+            // Remove any existing event listeners first
+            const newShutdownBtn = shutdownBtn.cloneNode(true);
+            shutdownBtn.parentNode.replaceChild(newShutdownBtn, shutdownBtn);
+            
+            // Add fresh event listener
+            newShutdownBtn.addEventListener('click', () => {
+                log('debug', 'Shutdown button clicked, showing confirmation dialog');
+                showShutdownConfirmation();
+            });
+        }
         
         confirmYesBtn.addEventListener('click', () => {
             sendShutdownRequest();
@@ -1425,12 +1576,15 @@ document.addEventListener('DOMContentLoaded', () => {
         dialog.style.display = 'none';
     }
 
-    // Function to send shutdown command - modified to log client request
+    // Function to send shutdown command - modified to log client request and track shutdown state
     function sendShutdownRequest() {
         if (websocket && websocket.readyState === WebSocket.OPEN) {
             log('info', 'Sending SHUTDOWN request to server...');
             statusMessage = 'Shutting down server...';
             renderStatusLine();
+            
+            // Mark that we're in a shutdown state
+            isServerShuttingDown = true;
             
             // Create command object
             const shutdownCommand = {
@@ -1444,13 +1598,21 @@ document.addEventListener('DOMContentLoaded', () => {
             // Send shutdown command via WebSocket
             websocket.send(JSON.stringify(shutdownCommand));
             
+            // Clean up any existing messages
+            removeAllShutdownMessages();
+            
             // Display a message to the user
-            const shutdownMessage = document.createElement('div');
-            shutdownMessage.className = 'shutdown-message';
-            shutdownMessage.innerHTML = '<h3>Server Shutdown Initiated</h3>' + 
-                '<p>The server is shutting down. This page will no longer be functional.</p>' +
-                '<p>You may close this window.</p>';
-            document.body.appendChild(shutdownMessage);
+            disconnectionMessage = document.createElement('div');
+            disconnectionMessage.className = 'shutdown-message disconnection-message';
+            disconnectionMessage.innerHTML = `
+                <h3>Server Shutdown Initiated</h3>
+                <p>The server is shutting down. Waiting for server to disconnect...</p>
+                <p>You may close this window.</p>
+            `;
+            document.body.appendChild(disconnectionMessage);
+            
+            // Make the message draggable
+            makeDraggable(disconnectionMessage);
             
             // Disable controls
             document.getElementById('shutdown-server-btn').disabled = true;
@@ -1521,12 +1683,149 @@ document.addEventListener('DOMContentLoaded', () => {
         })();
     }
     
+    // Schedule a reconnection with exponential backoff
+    function scheduleReconnect() {
+        // Clear any existing reconnect timer
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+        }
+        
+        // Calculate delay with exponential backoff (capped at maxReconnectDelay)
+        const delay = Math.min(reconnectIncrement * reconnectAttempts, maxReconnectDelay);
+        
+        log('info', `Scheduling reconnection attempt in ${delay / 1000} seconds (attempt #${reconnectAttempts + 1})`);
+        
+        // Set the reconnection time
+        const reconnectTime = new Date(Date.now() + delay);
+        
+        // Start a countdown timer to update the message
+        startReconnectCountdown(reconnectTime);
+        
+        // Schedule the reconnection
+        reconnectTimer = setTimeout(() => {
+            reconnectAttempts++;
+            log('info', `Attempting reconnection #${reconnectAttempts}`);
+            connectWebSocket();
+        }, delay);
+    }
+    
+    // Update the reconnection message with current delay
+    function updateReconnectionMessage(secondsRemaining) {
+        if (!disconnectionMessage) return;
+        
+        const minutes = Math.floor(secondsRemaining / 60);
+        const seconds = secondsRemaining % 60;
+        
+        let timeDisplay;
+        if (minutes > 0) {
+            timeDisplay = `${minutes} minute${minutes !== 1 ? 's' : ''} ${seconds} second${seconds !== 1 ? 's' : ''}`;
+        } else {
+            timeDisplay = `${seconds} second${seconds !== 1 ? 's' : ''}`;
+        }
+            
+        const reconnectInfo = disconnectionMessage.querySelector('.reconnect-info');
+        if (reconnectInfo) {
+            reconnectInfo.textContent = `Attempting to reconnect in ${timeDisplay}...`;
+        }
+    }
+    
+    // Start a countdown to the next reconnection attempt
+    let countdownInterval = null;
+    function startReconnectCountdown(reconnectTime) {
+        // Clear any existing countdown
+        if (countdownInterval) {
+            clearInterval(countdownInterval);
+        }
+        
+        // Function to update the countdown display
+        const updateCountdown = () => {
+            const now = new Date();
+            const diffMs = reconnectTime - now;
+            
+            if (diffMs <= 0) {
+                // Time's up, clear the interval
+                clearInterval(countdownInterval);
+                
+                const reconnectInfo = disconnectionMessage?.querySelector('.reconnect-info');
+                if (reconnectInfo) {
+                    reconnectInfo.textContent = 'Attempting to reconnect...';
+                }
+                return;
+            }
+            
+            // Calculate seconds remaining
+            const secondsRemaining = Math.ceil(diffMs / 1000);
+            updateReconnectionMessage(secondsRemaining);
+        };
+        
+        // Update immediately, then every second
+        updateCountdown();
+        countdownInterval = setInterval(updateCountdown, 1000);
+    }
+
+    // Function to remove all shutdown/disconnection messages
+    function removeAllShutdownMessages() {
+        // Find and remove all shutdown and disconnection messages
+        const messages = document.querySelectorAll('.shutdown-message, .server-disconnected-overlay');
+        messages.forEach(message => {
+            if (message && message.parentNode) {
+                message.parentNode.removeChild(message);
+            }
+        });
+        // Reset our reference if it was removed
+        if (disconnectionMessage && !document.body.contains(disconnectionMessage)) {
+            disconnectionMessage = null;
+        }
+    }
+
+    // Show server unavailable message with reconnect button
+    function showServerUnavailableMessage() {
+        // Always remove any existing shutdown messages first
+        removeAllShutdownMessages();
+        
+        // Create new disconnection message
+        disconnectionMessage = document.createElement('div');
+        disconnectionMessage.className = 'shutdown-message disconnection-message';
+        disconnectionMessage.innerHTML = `
+            <h3>Server Unavailable</h3>
+            <p>The server is currently unavailable or has been shut down.</p>
+            <p class="reconnect-info">Attempting to reconnect...</p>
+            <button id="retry-connection-btn">Retry Now</button>
+        `;
+        
+        document.body.appendChild(disconnectionMessage);
+        
+        // Make the message draggable
+        makeDraggable(disconnectionMessage);
+        
+        // Add retry button handler
+        const retryButton = document.getElementById('retry-connection-btn');
+        retryButton.addEventListener('click', () => {
+            log('info', 'Manual reconnection requested');
+            // Reset the reconnection counter
+            reconnectAttempts = 0;
+            
+            // Clear any scheduled reconnection
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+            
+            // Attempt to connect immediately
+            connectWebSocket();
+        });
+    }
+
     // --- Initialize Everything ---
     function initialize() {
         // Clear any stale data
         userData.clear();
         userOrder = [];
         serverStartTime = null;
+        
+        // Reset connection management variables
+        isServerShuttingDown = false;
+        reconnectAttempts = 0;
         
         log('info', 'Initializing VRC Monitor UI');
         
@@ -1540,11 +1839,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setupLoginDialog();
         setupLogFilters();
         
-        // Set up admin button click handlers
-        document.getElementById('shutdown-server-btn').addEventListener('click', () => {
-            showShutdownConfirmation();
-        });
-        
+        // Set up admin button click handlers - not shutdown, it's handled by setupShutdownDialog
         document.getElementById('test-announce-btn').addEventListener('click', () => {
             sendTestAnnounceRequest();
         });
@@ -1616,6 +1911,34 @@ document.addEventListener('DOMContentLoaded', () => {
                 submitLogin();
             }
         });
+    }
+
+    // Function to refresh admin button handlers
+    function refreshAdminButtonHandlers() {
+        log('debug', 'Refreshing admin button handlers');
+        
+        // Set up shutdown button via dialog setup
+        setupShutdownDialog();
+        
+        // Set up other admin buttons
+        const testAnnounceBtn = document.getElementById('test-announce-btn');
+        const dropSessionBtn = document.getElementById('drop-session-btn');
+        
+        if (testAnnounceBtn) {
+            const newTestBtn = testAnnounceBtn.cloneNode(true);
+            testAnnounceBtn.parentNode.replaceChild(newTestBtn, testAnnounceBtn);
+            newTestBtn.addEventListener('click', () => {
+                sendTestAnnounceRequest();
+            });
+        }
+        
+        if (dropSessionBtn) {
+            const newDropBtn = dropSessionBtn.cloneNode(true);
+            dropSessionBtn.parentNode.replaceChild(newDropBtn, dropSessionBtn);
+            newDropBtn.addEventListener('click', () => {
+                sendDropSessionRequest();
+            });
+        }
     }
 
     // Set up console capture

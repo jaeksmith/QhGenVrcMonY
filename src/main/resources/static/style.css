@@ -335,11 +335,35 @@
     box-shadow: 0 0 30px rgba(255, 0, 0, 0.3);
     animation: fadeIn 0.5s ease-out;
     max-width: 80%;
+    min-width: 300px;
 }
 
 .shutdown-message h3 {
     color: #f99;
     margin-top: 0;
+}
+
+.reconnect-info {
+    color: #aaa;
+    font-style: italic;
+    margin: 10px 0;
+}
+
+#retry-connection-btn {
+    background-color: #0066cc;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 1em;
+    margin-top: 15px;
+    transition: background-color 0.3s;
+}
+
+#retry-connection-btn:hover {
+    background-color: #0088ff;
+    box-shadow: 0 0 10px rgba(0, 136, 255, 0.5);
 }
 
 @keyframes fadeIn {
@@ -443,6 +467,8 @@ body {
     height: 100vh;
     background-color: #f4f4f4;
     overflow: hidden; /* Prevent body scroll */
+    /* Test marker for CSS update - should add a small border */
+    border-top: 3px solid #ff3366;
 }
 
 #refresh-button {
