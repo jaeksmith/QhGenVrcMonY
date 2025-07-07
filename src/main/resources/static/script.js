@@ -153,8 +153,8 @@ document.addEventListener('DOMContentLoaded', () => {
         'ONLINE': 0,
         'ON_WEBSITE': 1,
         'ERROR': 2,
-        'OFFLINE': 3,
-        'OTHER': 4
+        'OTHER': 3,  // UNKNOWN states (orange)
+        'OFFLINE': 4
     };
 
     // --- TTS Setup ---
