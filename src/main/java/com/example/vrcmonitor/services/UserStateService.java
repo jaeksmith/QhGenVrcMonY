@@ -80,6 +80,25 @@ public class UserStateService {
         return (container != null) ? container.getLatestState() : null;
     }
 
+    /**
+     * Get the previous state for a user (before the current state)
+     * @param vrcUid The VRChat user ID
+     * @return The previous state, or null if no previous state exists
+     */
+    public UserState getPreviousUserState(String vrcUid) {
+        UserStateContainer container = userStateAndHistory.get(vrcUid);
+        if (container == null || container.getHistory().isEmpty()) {
+            return null;
+        }
+        
+        List<UserState> history = container.getHistory();
+        if (history.size() < 2) {
+            return null; // No previous state
+        }
+        
+        return history.get(history.size() - 2); // Second to last entry
+    }
+
     // Method to get snapshot for initial WebSocket send
     public Map<String, UserStateContainerSnapshot> getSnapshot() {
         Map<String, UserStateContainerSnapshot> snapshot = new ConcurrentHashMap<>();
@@ -173,6 +192,7 @@ public class UserStateService {
         OK, 
         ERROR,
         OFFLINE,    // When user is offline
-        DISCONNECTED // When server is not connected
+        DISCONNECTED, // When server is not connected
+        UNKNOWN      // When we have session but don't know user state yet
     }
 } 

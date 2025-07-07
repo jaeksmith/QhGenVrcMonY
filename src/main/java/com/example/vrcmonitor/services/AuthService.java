@@ -53,6 +53,27 @@ public class AuthService {
             try {
                 // Use test API call to validate with self user endpoint instead
                 vrchatApiService.getCurrentUser()
+                    .retryWhen(reactor.util.retry.Retry.backoff(3, java.time.Duration.ofSeconds(2))
+                        .maxBackoff(java.time.Duration.ofSeconds(10))
+                        .filter(throwable -> {
+                            // Only retry on network-related errors, not authentication errors
+                            if (throwable instanceof VRChatApiService.AuthenticationException) {
+                                log.debug("Not retrying authentication error during session validation");
+                                return false;
+                            }
+                            
+                            // Retry on network-related errors
+                            boolean shouldRetry = isRetryableError(throwable);
+                            if (shouldRetry) {
+                                log.debug("Retrying session validation due to network error: {}", throwable.getMessage());
+                            }
+                            return shouldRetry;
+                        })
+                        .doBeforeRetry(retrySignal -> {
+                            log.warn("Retrying session validation (attempt {}/3): {}", 
+                                    retrySignal.totalRetries() + 1, retrySignal.failure().getMessage());
+                        })
+                    )
                     .doOnNext(user -> {
                         // If we got a response without error, the session is valid
                         log.info("Restored session is valid, user: {}", user.getDisplayName());
@@ -289,5 +310,15 @@ public class AuthService {
     // Check if we have an auth cookie in the API service
     public boolean hasCredentials() {
         return vrchatApiService.getAuthCookie() != null;
+    }
+
+    // Helper method to determine if an error is retryable (copied from VRChatApiService)
+    private boolean isRetryableError(Throwable throwable) {
+        return (throwable instanceof java.net.SocketException ||
+                throwable instanceof java.io.IOException || 
+                throwable instanceof io.netty.channel.ConnectTimeoutException || 
+                // Check if WebClient exception is caused by a retryable type
+                (throwable instanceof org.springframework.web.reactive.function.client.WebClientRequestException && 
+                 throwable.getCause() != null && isRetryableError(throwable.getCause())));
     }
 } 

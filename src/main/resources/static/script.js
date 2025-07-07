@@ -279,6 +279,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return 'ERROR';
         }
         
+        // Handle server-reported unknown state (when we have session but no user data yet)
+        if (latestStateDTO.statusType === 'UNKNOWN') {
+            log('debug', `User ${latestStateDTO.hrToken} has UNKNOWN status: ${latestStateDTO.errorMessage || 'Initializing...'}`);
+            return 'OTHER'; // Map UNKNOWN to OTHER (orange) for now
+        }
+        
         // Handle null user data (could happen during initialization or if API returns incomplete data)
         if (!latestStateDTO.user) {
             log('debug', `User ${latestStateDTO.hrToken} has null user data`);

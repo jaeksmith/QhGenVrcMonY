@@ -14,6 +14,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -88,7 +89,10 @@ public class MonitoringService {
         // 2. At least 0.5 seconds after a request completes before starting the next
         // 3. These limits apply across all users to prevent API rate limiting
         
-        // Start monitoring for each user
+        // Add a small delay to allow network connectivity to stabilize after hibernation/restart
+        log.info("Waiting 3 seconds for network connectivity to stabilize before starting monitoring...");
+        
+        // Start monitoring for each user with a delay
         for (UserConfig user : config.getUsers()) {
             // Cache user config for later lookups
             userConfigMap.put(user.getVrcUid(), user);
@@ -96,11 +100,10 @@ public class MonitoringService {
             log.info("Scheduling monitoring for user: {} ({}) with poll rate: {}", 
                     user.getHrToken(), user.getVrcUid(), user.getPollRate());
             
-            // Schedule a fixed-delay task for this user (fixed-delay means the next execution
-            // waits until the previous completes, which helps avoid API rate limits)
+            // Schedule a fixed-delay task for this user with initial delay to allow network stabilization
             ScheduledFuture<?> task = taskScheduler.scheduleWithFixedDelay(
                 () -> pollUserStatus(user),
-                new Date(), // Start immediately - ApiRateLimiter will handle throttling
+                new Date(System.currentTimeMillis() + 3000), // Start after 3 second delay
                 user.getPollRateDuration().toMillis()
             );
             scheduledTasks.put(user.getVrcUid(), task);
@@ -146,7 +149,7 @@ public class MonitoringService {
         }
         
         try {
-            // Make the API call using reactive approach
+            // Make the API call using reactive approach with improved error handling
             vrchatApiService.getUserByUid(user.getVrcUid())
                 .doOnNext(vrchatUser -> {
                     log.debug("Received user data for {}: {}", user.getHrToken(), vrchatUser.getStatus());
@@ -154,9 +157,26 @@ public class MonitoringService {
                     broadcastUserUpdate(user.getVrcUid(), vrchatUser);
                 })
                 .doOnError(error -> {
-                    log.error("Error polling user {}: {}", user.getHrToken(), error.getMessage());
-                    userStateService.updateUserErrorState(user.getVrcUid(), error.getMessage(), Instant.now());
-                    broadcastUserErrorUpdate(user.getVrcUid(), error.getMessage());
+                    // Use proper error classification instead of string matching
+                    String errorMessage = error.getMessage();
+                    
+                    if (error instanceof VRChatApiService.AuthenticationException) {
+                        log.error("Authentication error polling user {}: {}", user.getHrToken(), errorMessage);
+                        userStateService.updateUserErrorState(user.getVrcUid(), "Authentication error: " + errorMessage, Instant.now());
+                    } else if (error instanceof VRChatApiService.ApiException) {
+                        VRChatApiService.ApiException apiError = (VRChatApiService.ApiException) error;
+                        log.error("API error polling user {} (status {}): {}", user.getHrToken(), apiError.getStatusCode(), errorMessage);
+                        userStateService.updateUserErrorState(user.getVrcUid(), "API error (" + apiError.getStatusCode() + "): " + errorMessage, Instant.now());
+                    } else if (isRetryableError(error)) {
+                        log.warn("Network error polling user {} (may be transient): {}", user.getHrToken(), errorMessage);
+                        // For network errors, use a more descriptive message
+                        userStateService.updateUserErrorState(user.getVrcUid(), 
+                            "Network error: " + errorMessage, Instant.now());
+                    } else {
+                        log.error("Error polling user {}: {}", user.getHrToken(), errorMessage);
+                        userStateService.updateUserErrorState(user.getVrcUid(), errorMessage, Instant.now());
+                    }
+                    broadcastUserErrorUpdate(user.getVrcUid(), errorMessage);
                 })
                 .subscribe();
         } catch (Exception e) {
@@ -191,5 +211,15 @@ public class MonitoringService {
             }
         }
         return null;
+    }
+
+    // Helper method to determine if an error is retryable (copied from VRChatApiService)
+    private boolean isRetryableError(Throwable throwable) {
+        return (throwable instanceof java.net.SocketException ||
+                throwable instanceof java.io.IOException || 
+                throwable instanceof io.netty.channel.ConnectTimeoutException || 
+                // Check if WebClient exception is caused by a retryable type
+                (throwable instanceof org.springframework.web.reactive.function.client.WebClientRequestException && 
+                 throwable.getCause() != null && isRetryableError(throwable.getCause())));
     }
 } 

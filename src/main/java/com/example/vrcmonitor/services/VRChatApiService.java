@@ -581,10 +581,11 @@ public class VRChatApiService {
                                 if (response.statusCode().equals(HttpStatusCode.valueOf(401))) {
                                     log.warn("Authentication failed (401) for user {}, clearing session", vrcUid);
                                     logout(); // Clear session cookies
-                                    return Mono.error(new RuntimeException("Authentication error"));
+                                    return Mono.error(new AuthenticationException("Authentication error"));
                                 } else {
-                                    return Mono.error(new RuntimeException(
-                                        "API Error " + response.statusCode().value() + ": " + body));
+                                    return Mono.error(new ApiException(
+                                        "API Error " + response.statusCode().value() + ": " + body, 
+                                        response.statusCode().value()));
                                 }
                             });
                     }
@@ -593,7 +594,32 @@ public class VRChatApiService {
                     // Record completion time when the request finishes (success or error)
                     apiRateLimiter.recordRequestFinished();
                     log.debug("Request for user {} completed with signal: {}", vrcUid, signalType);
-                });
+                })
+                // Add retry logic for network-related errors only
+                .retryWhen(Retry.backoff(MAX_RETRY_ATTEMPTS, MIN_RETRY_BACKOFF)
+                    .maxBackoff(MAX_RETRY_BACKOFF)
+                    .filter(throwable -> {
+                        // Only retry on network-related errors, not authentication or API errors
+                        if (throwable instanceof AuthenticationException || throwable instanceof ApiException) {
+                            log.debug("Not retrying authentication/API error for user {}: {}", vrcUid, throwable.getMessage());
+                            return false;
+                        }
+                        
+                        // Retry on network-related errors
+                        boolean shouldRetry = isRetryableError(throwable);
+                        if (shouldRetry) {
+                            log.debug("Retrying request for user {} due to network error: {}", vrcUid, throwable.getMessage());
+                        } else {
+                            log.debug("Not retrying request for user {} - not a retryable error: {}", vrcUid, throwable.getMessage());
+                        }
+                        return shouldRetry;
+                    })
+                    .doBeforeRetry(retrySignal -> {
+                        log.warn("Retrying request for user {} (attempt {}/{}): {}", 
+                                vrcUid, retrySignal.totalRetries() + 1, MAX_RETRY_ATTEMPTS + 1, 
+                                retrySignal.failure().getMessage());
+                    })
+                );
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -717,5 +743,34 @@ public class VRChatApiService {
                 });
         })
         .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    // Custom exception classes for proper error classification
+    public static class AuthenticationException extends RuntimeException {
+        public AuthenticationException(String message) {
+            super(message);
+        }
+        
+        public AuthenticationException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+    
+    public static class ApiException extends RuntimeException {
+        private final int statusCode;
+        
+        public ApiException(String message, int statusCode) {
+            super(message);
+            this.statusCode = statusCode;
+        }
+        
+        public ApiException(String message, int statusCode, Throwable cause) {
+            super(message, cause);
+            this.statusCode = statusCode;
+        }
+        
+        public int getStatusCode() {
+            return statusCode;
+        }
     }
 } 

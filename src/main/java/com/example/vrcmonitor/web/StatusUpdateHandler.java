@@ -136,16 +136,30 @@ public class StatusUpdateHandler extends TextWebSocketHandler {
                             userConfig.getAnnounceVolumeMult()
                         );
                     } else {
-                        // When not logged in or no data yet, show as disconnected
-                        return new StatusUpdateDTO(
-                            userConfig.getVrcUid(),
-                            userConfig.getHrToken(),
-                            null, 
-                            authService.hasActiveSession() ? UserStateService.StatusType.ERROR : UserStateService.StatusType.OFFLINE, 
-                            authService.hasActiveSession() ? "Initializing..." : "Server not connected", 
-                            Instant.now(),
-                            userConfig.getAnnounceVolumeMult()
-                        );
+                        // When not logged in or no data yet, show appropriate state
+                        if (authService.hasActiveSession()) {
+                            // We have a session but no user data yet - show as unknown
+                            return new StatusUpdateDTO(
+                                userConfig.getVrcUid(),
+                                userConfig.getHrToken(),
+                                null, 
+                                UserStateService.StatusType.UNKNOWN, 
+                                "Initializing...", 
+                                Instant.now(),
+                                userConfig.getAnnounceVolumeMult()
+                            );
+                        } else {
+                            // No active session - show as unknown (we don't know their state)
+                            return new StatusUpdateDTO(
+                                userConfig.getVrcUid(),
+                                userConfig.getHrToken(),
+                                null, 
+                                UserStateService.StatusType.UNKNOWN, 
+                                "Server not connected", 
+                                Instant.now(),
+                                userConfig.getAnnounceVolumeMult()
+                            );
+                        }
                     }
                 })
                 .collect(Collectors.toList());
