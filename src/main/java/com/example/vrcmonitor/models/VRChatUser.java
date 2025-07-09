@@ -22,6 +22,7 @@ public class VRChatUser {
     private String currentAvatarImageUrl;
     private String currentAvatarThumbnailImageUrl;
     private Instant last_login;
+    private Instant last_activity; // When user was last online/active
     private boolean isFriend;
     private String bio;
     private String userIcon;

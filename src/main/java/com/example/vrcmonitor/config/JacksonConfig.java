@@ -17,7 +17,7 @@ public class JacksonConfig {
         // Register the module for Java 8+ Time API (Instant, LocalDate, etc.)
         objectMapper.registerModule(new JavaTimeModule());
         // Optional: Configure date/time format (ISO-8601 is default for Instant with the module)
-        // objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         System.out.println("DEBUG: Custom ObjectMapper bean created with JavaTimeModule.");
         return objectMapper;
     }

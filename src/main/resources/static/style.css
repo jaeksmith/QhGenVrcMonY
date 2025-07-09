@@ -608,6 +608,7 @@ body {
     min-height: 35px; /* Adjust as needed, was 50px */
 }
 
+/* Timeline layout structure - Phase 1: Hidden duration labels */
 .timeline-user-row .id-area {
     width: var(--timeline-id-width);
     flex-shrink: 0;
@@ -620,15 +621,48 @@ body {
     background-color: #f8f8f8; /* Default, will be overridden by JS */
 }
 
+.timeline-user-row .id-area .user-info {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    justify-content: center;
+}
+
+.timeline-user-row .id-area .user-info .user-name {
+    font-size: 0.9em;
+    line-height: 1.0;
+    margin: 0;
+}
+
+.timeline-user-row .user-timeline-duration {
+    display: block; /* Visible for Phase 2 testing */
+    font-size: 0.75em;
+    color: #222;
+    opacity: 0.7;
+    margin: 0;
+    line-height: 0.9;
+    white-space: nowrap;
+}
+
+/* Phase 3: Add not-available and status-specific styling */
+.user-timeline-duration.not-available {
+    font-style: italic;
+    opacity: 1;
+    color: #bbb;
+}
+
+/* Brighter color for offline timespans */
+.timeline-user-row .status-bg-offline .user-timeline-duration,
+.timeline-user-row .status-bg-error .user-timeline-duration {
+    color: #f0f0f0 !important;
+    opacity: 0.9 !important;
+}
+
 .timeline-user-row .id-area img {
     width: 24px;  /* Was 30px */
     height: 24px; /* Was 30px */
     border-radius: 3px;
     object-fit: cover;
-}
-
-.timeline-user-row .id-area span {
-     font-size: 0.9em;
 }
 
 .timeline-user-row .graph-area {

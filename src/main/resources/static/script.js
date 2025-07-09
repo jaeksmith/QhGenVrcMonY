@@ -208,6 +208,74 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    function formatUserDuration(user, isOnline) {
+        // For online users: use last_login (how long logged in)
+        // For offline users: use last_activity (when last online)
+        let refTime = null;
+        
+        if (isOnline) {
+            // Online: show how long they've been logged in
+            if (user && user.last_login) {
+                if (typeof user.last_login === 'number') {
+                    refTime = user.last_login * 1000; // Unix timestamp
+                } else {
+                    refTime = Date.parse(user.last_login); // ISO string
+                }
+            }
+        } else {
+            // Offline: show how long since last online
+            if (user && user.last_activity) {
+                if (typeof user.last_activity === 'number') {
+                    refTime = user.last_activity * 1000;
+                } else {
+                    refTime = Date.parse(user.last_activity);
+                }
+            }
+            // Fallback to last_login if no last_activity
+            if ((!refTime || isNaN(refTime)) && user && user.last_login) {
+                if (typeof user.last_login === 'number') {
+                    refTime = user.last_login * 1000;
+                } else {
+                    refTime = Date.parse(user.last_login);
+                }
+            }
+        }
+        
+        if (!refTime || isNaN(refTime)) return null;
+        
+        const now = Date.now();
+        let diff = Math.max(0, now - refTime);
+        
+        const seconds = Math.floor(diff / 1000) % 60;
+        const minutes = Math.floor(diff / (1000 * 60)) % 60;
+        const hours = Math.floor(diff / (1000 * 60 * 60)) % 24;
+        const days = Math.floor(diff / (1000 * 60 * 60 * 24)) % 30;
+        const months = Math.floor(diff / (1000 * 60 * 60 * 24 * 30)) % 12;
+        const years = Math.floor(diff / (1000 * 60 * 60 * 24 * 365));
+        
+        function format(n) { return n.toString(); } // No zero padding
+        
+        if (isOnline) {
+            // Online: start with first non-zero, show all remaining
+            const parts = [];
+            if (days > 0) parts.push(`${format(days)}d`);
+            if (hours > 0 || days > 0) parts.push(`${format(hours)}h`);
+            if (minutes > 0 || hours > 0 || days > 0) parts.push(`${format(minutes)}m`);
+            parts.push(`${format(seconds)}s`);
+            return parts.join(' ');
+        } else {
+            // Offline: show up to 2 largest non-zero components
+            const parts = [];
+            if (years > 0) parts.push(`${format(years)}y`);
+            if (months > 0) parts.push(`${format(months)}m`);
+            if (days > 0) parts.push(`${format(days)}d`);
+            if (hours > 0) parts.push(`${format(hours)}h`);
+            if (minutes > 0) parts.push(`${format(minutes)}m`);
+            if (seconds > 0 && parts.length < 2) parts.push(`${format(seconds)}s`);
+            return parts.slice(0, 2).join(' ');
+        }
+    }
+
     // Capture console logs
     function captureConsoleLog(level, args) {
         // Convert arguments to array and join them
@@ -523,10 +591,36 @@ document.addEventListener('DOMContentLoaded', () => {
             img.src = getUserIconUrl(userData.state.user);
             img.alt = '';
             img.onerror = () => { img.src = getUserIconUrl(null); }; 
+            
+            const userInfo = document.createElement('div');
+            userInfo.classList.add('user-info');
+
             const nameSpan = document.createElement('span');
+            nameSpan.classList.add('user-name');
             nameSpan.textContent = userData.state.hrToken;
+
+            const durationLabel = document.createElement('span');
+            durationLabel.className = 'user-timeline-duration';
+            durationLabel.style.display = 'block'; // Show for Phase 2 testing
+            
+            // Phase 3: Add actual duration calculation
+            let isOnline = userData.status === 'ONLINE';
+            let durationText = null;
+            if (userData.state.user) {
+                durationText = formatUserDuration(userData.state.user, isOnline);
+            }
+            if (durationText) {
+                durationLabel.textContent = durationText;
+            } else {
+                durationLabel.textContent = 'not-available';
+                durationLabel.classList.add('not-available');
+            }
+
+            // Assemble: icon + (name + duration in column)
             idArea.appendChild(img);
-            idArea.appendChild(nameSpan);
+            userInfo.appendChild(nameSpan);
+            userInfo.appendChild(durationLabel);
+            idArea.appendChild(userInfo);
 
             const graphArea = document.createElement('div');
             graphArea.classList.add('graph-area');
@@ -742,8 +836,27 @@ document.addEventListener('DOMContentLoaded', () => {
                                 timelineIdArea.style.backgroundColor = bgColor;
                                 const img = timelineIdArea.querySelector('img');
                                 if (img) img.src = getUserIconUrl(updatedStateDTO.user);
-                                const span = timelineIdArea.querySelector('span');
-                                if (span) span.textContent = updatedStateDTO.hrToken;
+                                const nameSpan = timelineIdArea.querySelector('.user-name');
+                                if (nameSpan) nameSpan.textContent = updatedStateDTO.hrToken;
+
+                                // Update duration label (visible for Phase 2)
+                                const durationLabel = timelineIdArea.querySelector('.user-timeline-duration');
+                                if (durationLabel) {
+                                    // Phase 3: Add actual duration calculation
+                                    let isOnline = newStatus === 'ONLINE';
+                                    let durationText = null;
+                                    if (updatedStateDTO.user) {
+                                        durationText = formatUserDuration(updatedStateDTO.user, isOnline);
+                                    }
+                                    if (durationText) {
+                                        durationLabel.textContent = durationText;
+                                        durationLabel.classList.remove('not-available');
+                                    } else {
+                                        durationLabel.textContent = 'not-available';
+                                        durationLabel.classList.add('not-available');
+                                    }
+                                    durationLabel.style.display = 'block'; // Show for Phase 2
+                                }
 
                                 if (newStatus === 'OFFLINE' || newStatus === 'ERROR') {
                                     timelineIdArea.style.color = 'white';
